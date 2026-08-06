@@ -15,22 +15,16 @@ router.post('/', async (req, res) => {
     const date = now.toISOString().split('T')[0];
     const timestamp = now.getTime();
 
-    // 检查当天是否已使用骰子
-    const diceUsed = await req.redis.hget(`wishstar:dice:${userId}:${date}`, 'used');
-    if (diceUsed === '1') {
-      return res.json({ code: 1, message: '今日骰子次数已用完' });
+    // 使用 half_draw_count 作为掷骰子次数
+    const diceCount = await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count');
+    const count = parseInt(diceCount) || 0;
+
+    if (count < 1) {
+      return res.json({ code: 1, message: '今日掷骰子次数不足' });
     }
 
-    // 检查星星是否足够（需要5颗）
-    const currentStars = await req.redis.hget(`wishstar:user:${userId}`, 'current_stars');
-    const stars = parseInt(currentStars) || 0;
-
-    if (stars < 5) {
-      return res.json({ code: 1, message: '需要至少5颗星星才能掷骰子', starsRequired: 5, currentStars: stars });
-    }
-
-    // 消耗5颗星星
-    await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -5);
+    // 消耗1次掷骰子次数
+    await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', -1);
 
     // 生成骰子点数（1-6）
     const diceResult = Math.floor(Math.random() * 6) + 1;
@@ -40,21 +34,8 @@ router.post('/', async (req, res) => {
     await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', starsEarned);
     await req.redis.hincrby(`wishstar:user:${userId}`, 'total_stars', starsEarned);
 
-    // 检查并自动兑换宝石（满10颗自动兑换）
-    const afterDiceStars = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'current_stars')) || 0;
-    if (afterDiceStars >= 10) {
-      const gemsToAdd = Math.floor(afterDiceStars / 10);
-      const remainingStars = afterDiceStars % 10;
-      const currentGems = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'gems')) || 0;
-      await req.redis.hset(`wishstar:user:${userId}`, {
-        current_stars: remainingStars.toString(),
-        gems: (currentGems + gemsToAdd).toString()
-      });
-    }
-
     // 记录骰子使用
     await req.redis.hset(`wishstar:dice:${userId}:${date}`, {
-      used: '1',
       dice_result: diceResult.toString(),
       stars_earned: starsEarned.toString()
     });
@@ -62,33 +43,24 @@ router.post('/', async (req, res) => {
     // 记录流水
     const log = {
       id: uuidv4(),
-      type: 'expenditure',
-      category: 'dice',
-      amount: -5,
-      description: `掷骰子消耗5颗星星，获得${starsEarned}颗星星（点数：${diceResult}）`,
-      created_at: timestamp
-    };
-    await req.redis.zadd(`wishstar:logs:${userId}`, timestamp, JSON.stringify(log));
-
-    // 记录收入流水
-    const incomeLog = {
-      id: uuidv4(),
       type: 'income',
       category: 'dice',
       amount: starsEarned,
       description: `掷骰子获得${starsEarned}颗星星（点数：${diceResult}）`,
       created_at: timestamp
     };
-    await req.redis.zadd(`wishstar:logs:${userId}`, timestamp + 1, JSON.stringify(incomeLog));
+    await req.redis.zadd(`wishstar:logs:${userId}`, timestamp, JSON.stringify(log));
 
     const newCurrentStars = await req.redis.hget(`wishstar:user:${userId}`, 'current_stars');
+    const newDiceCount = await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count');
 
     res.json({
       code: 0,
       data: {
         diceResult,
         starsEarned,
-        currentStars: parseInt(newCurrentStars)
+        currentStars: parseInt(newCurrentStars),
+        remainingDiceCount: parseInt(newDiceCount) || 0
       }
     });
   } catch (error) {
@@ -105,19 +77,17 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ code: 1, message: '缺少userId参数' });
     }
 
-    const targetDate = date || new Date().toISOString().split('T')[0];
-
-    const diceUsed = await req.redis.hget(`wishstar:dice:${userId}:${targetDate}`, 'used');
+    const diceCount = await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count');
     const currentStars = await req.redis.hget(`wishstar:user:${userId}`, 'current_stars');
+    const count = parseInt(diceCount) || 0;
     const stars = parseInt(currentStars) || 0;
 
     res.json({
       code: 0,
       data: {
-        canRoll: diceUsed !== '1' && stars >= 5,
-        starsRequired: 5,
-        currentStars: stars,
-        used: diceUsed === '1'
+        canRoll: count > 0,
+        diceCount: count,
+        currentStars: stars
       }
     });
   } catch (error) {

@@ -12,19 +12,11 @@
         </div>
       </div>
 
-      <div class="resource-card gem-card">
-        <div class="resource-icon">💎</div>
+      <div class="resource-card dice-card">
+        <div class="resource-icon">🎲</div>
         <div class="resource-info">
-          <div class="resource-label">宝石</div>
-          <div class="resource-value number">{{ stats?.gems || 0 }}</div>
-        </div>
-      </div>
-
-      <div class="resource-card draw-card">
-        <div class="resource-icon">🎴</div>
-        <div class="resource-info">
-          <div class="resource-label">抽卡次数</div>
-          <div class="resource-value number">{{ (stats?.drawCount || 0) + (stats?.halfDrawCount || 0) }}</div>
+          <div class="resource-label">掷骰子次数</div>
+          <div class="resource-value number">{{ stats?.halfDrawCount || 0 }}</div>
         </div>
       </div>
     </div>
@@ -117,7 +109,7 @@ const submitQuickRecord = async () => {
 <style scoped>
 .resources-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 1.5rem;
   margin-bottom: 2rem;
 }
@@ -140,11 +132,7 @@ const submitQuickRecord = async () => {
   text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
 }
 
-.gem-card .resource-icon {
-  text-shadow: 0 0 20px rgba(155, 89, 182, 0.5);
-}
-
-.draw-card .resource-icon {
+.dice-card .resource-icon {
   text-shadow: 0 0 20px rgba(74, 144, 217, 0.5);
 }
 

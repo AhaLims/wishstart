@@ -13,18 +13,10 @@
       </div>
 
       <div class="stat-item">
-        <span class="stat-icon">💎</span>
+        <span class="stat-icon">🎲</span>
         <div class="stat-info">
-          <div class="stat-value number">{{ stats?.gems || 0 }}</div>
-          <div class="stat-label">宝石</div>
-        </div>
-      </div>
-
-      <div class="stat-item">
-        <span class="stat-icon">🎴</span>
-        <div class="stat-info">
-          <div class="stat-value number">{{ (stats?.drawCount || 0) + (stats?.halfDrawCount || 0) }}</div>
-          <div class="stat-label">抽卡次数</div>
+          <div class="stat-value number">{{ stats?.halfDrawCount || 0 }}</div>
+          <div class="stat-label">掷骰子次数</div>
         </div>
       </div>
 
@@ -46,29 +38,6 @@
       <div class="task-stat-card">
         <div class="task-stat-value number">{{ stats?.activeTasks || 0 }}</div>
         <div class="task-stat-label">进行中</div>
-      </div>
-    </div>
-
-    <!-- 宝石兑换 -->
-    <div class="exchange-section">
-      <h2 class="section-title">宝石兑换</h2>
-      <div class="exchange-card">
-        <p>10颗星星 = 1颗宝石</p>
-        <div class="exchange-form">
-          <input
-            v-model.number="exchangeStars"
-            type="number"
-            class="input"
-            placeholder="输入星星数量"
-          />
-          <button
-            class="btn btn-primary"
-            :disabled="!canExchange"
-            @click="exchangeGem"
-          >
-            兑换
-          </button>
-        </div>
       </div>
     </div>
 
@@ -97,17 +66,12 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useUserStore } from '../stores/user'
-import { statsApi, gemApi } from '../api'
+import { statsApi } from '../api'
 
 const userStore = useUserStore()
 const logs = ref([])
-const exchangeStars = ref(10)
 
 const stats = computed(() => userStore.stats)
-
-const canExchange = computed(() => {
-  return exchangeStars.value >= 10 && (stats.value?.currentStars || 0) >= exchangeStars.value
-})
 
 const fetchLogs = async () => {
   try {
@@ -117,23 +81,6 @@ const fetchLogs = async () => {
     }
   } catch (error) {
     console.error('Fetch logs error:', error)
-  }
-}
-
-const exchangeGem = async () => {
-  if (!canExchange.value) return
-
-  try {
-    const res = await gemApi.exchange(userStore.userId, exchangeStars.value)
-    if (res.code === 0) {
-      alert(`兑换成功！获得 ${res.data.gemsReceived} 颗宝石`)
-      exchangeStars.value = 10
-      await userStore.fetchStats()
-    } else {
-      alert(res.message || '兑换失败')
-    }
-  } catch (error) {
-    alert('兑换失败')
   }
 }
 
@@ -156,7 +103,7 @@ onMounted(async () => {
 <style scoped>
 .overall-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 1rem;
   margin-bottom: 2rem;
 }
@@ -214,32 +161,6 @@ onMounted(async () => {
   font-size: 1.3rem;
   margin-bottom: 1rem;
   color: #B0B0B0;
-}
-
-.exchange-section {
-  margin-bottom: 2rem;
-}
-
-.exchange-card {
-  background: rgba(22, 33, 62, 0.8);
-  border-radius: 16px;
-  padding: 1.5rem;
-  border: 1px solid rgba(155, 89, 182, 0.2);
-}
-
-.exchange-card p {
-  text-align: center;
-  color: #B0B0B0;
-  margin-bottom: 1rem;
-}
-
-.exchange-form {
-  display: flex;
-  gap: 1rem;
-}
-
-.exchange-form .input {
-  flex: 1;
 }
 
 .logs-section {

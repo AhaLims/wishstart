@@ -7,7 +7,7 @@ const PREFIX = 'wishstar:wish';
 // 创建愿望
 router.post('/', async (req, res) => {
   try {
-    const { userId, name, imageUrl, totalFragments } = req.body;
+    const { userId, name, icon, totalFragments } = req.body;
 
     if (!userId || !name) {
       return res.status(400).json({ code: 1, message: '缺少必要参数' });
@@ -20,7 +20,7 @@ router.post('/', async (req, res) => {
       id: wishId,
       user_id: userId,
       name: name,
-      image_url: imageUrl || '',
+      icon: icon || '🎁',
       total_fragments: totalFragments ? totalFragments.toString() : '10',
       current_fragments: '0',
       status: 'collecting',

@@ -69,10 +69,4 @@ export const statsApi = {
   getLogs: (userId, limit) => api.get(`/stats/logs?userId=${userId}&limit=${limit || 50}`)
 }
 
-// 宝石API
-export const gemApi = {
-  exchange: (userId, stars) => api.post('/gems/exchange', { userId, stars }),
-  getGems: (userId) => api.get(`/gems?userId=${userId}`)
-}
-
 export default api

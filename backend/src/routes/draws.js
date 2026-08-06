@@ -33,63 +33,34 @@ router.post('/', async (req, res) => {
     }
 
     let costStars = 0;
-    let costDrawCount = 0;
-    let costHalfDrawCount = 0;
 
-    // 处理消耗
-    if (type === 'stars') {
-      // 消耗星星抽卡
-      const currentStars = await req.redis.hget(`wishstar:user:${userId}`, 'current_stars');
-      const stars = parseInt(currentStars) || 0;
+    // 只支持消耗星星抽卡
+    const currentStars = await req.redis.hget(`wishstar:user:${userId}`, 'current_stars');
+    const stars = parseInt(currentStars) || 0;
 
-      // 根据抽卡类型决定消耗
-      // 全价抽卡：5颗星星，半价抽卡：3颗星星
-      const priceMap = {
-        normal: 5,   // 全价抽卡消耗5颗星
-        half: 3      // 半价抽卡消耗3颗星
-      };
-      costStars = priceMap[drawType] || 5;
+    // 根据抽卡类型决定消耗
+    // 全价抽卡：5颗星星，半价抽卡：3颗星星
+    const priceMap = {
+      normal: 5,   // 全价抽卡消耗5颗星
+      half: 3      // 半价抽卡消耗3颗星
+    };
+    costStars = priceMap[drawType] || 5;
 
-      // 半价抽卡需要消耗半价抽卡次数
-      if (drawType === 'half') {
-        const halfDrawCount = await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count');
-        const count = parseInt(halfDrawCount) || 0;
-        if (count < 1) {
-          return res.json({ code: 1, message: '半价抽卡次数不足' });
-        }
-        await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', -1);
-        costHalfDrawCount = 1;
+    // 半价抽卡需要消耗半价抽卡次数
+    if (drawType === 'half') {
+      const halfDrawCount = await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count');
+      const count = parseInt(halfDrawCount) || 0;
+      if (count < 1) {
+        return res.json({ code: 1, message: '半价抽卡次数不足' });
       }
-
-      if (stars < costStars) {
-        return res.json({ code: 1, message: `星星不足，需要${costStars}颗星星` });
-      }
-
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -costStars);
-    } else if (type === 'count') {
-      // 消耗抽卡次数
-      if (drawType === 'normal') {
-        const drawCount = await req.redis.hget(`wishstar:user:${userId}`, 'draw_count');
-        const count = parseInt(drawCount) || 0;
-        if (count < 1) {
-          return res.json({ code: 1, message: '全价抽卡次数不足' });
-        }
-        costDrawCount = 1;
-        await req.redis.hincrby(`wishstar:user:${userId}`, 'draw_count', -1);
-      } else if (drawType === 'half') {
-        const halfDrawCount = await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count');
-        const count = parseInt(halfDrawCount) || 0;
-        if (count < 1) {
-          return res.json({ code: 1, message: '半价抽卡次数不足' });
-        }
-        costHalfDrawCount = 1;
-        await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', -1);
-      } else {
-        return res.json({ code: 1, message: '无效的抽卡类型' });
-      }
-    } else {
-      return res.json({ code: 1, message: '无效的消耗类型' });
+      await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', -1);
     }
+
+    if (stars < costStars) {
+      return res.json({ code: 1, message: `星星不足，需要${costStars}颗星星` });
+    }
+
+    await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -costStars);
 
     // 增加碎片
     const newFragments = await req.redis.hincrby(`wishstar:wish:${randomWishId}`, 'current_fragments', 1);
@@ -112,9 +83,9 @@ router.post('/', async (req, res) => {
       wish_id: randomWishId,
       wish_name: wish.name,
       fragment_index: newFragments,
-      type,
+      type: 'stars',
       draw_type: drawType,
-      cost: costStars || costDrawCount || costHalfDrawCount,
+      cost: costStars,
       created_at: timestamp
     };
 
@@ -122,12 +93,10 @@ router.post('/', async (req, res) => {
 
     // 记录流水
     let logDescription = '';
-    if (type === 'stars') {
-      logDescription = `消耗${costStars}颗星星抽卡，获得「${wish.name}」碎片(${newFragments}/${totalFragments})`;
-    } else if (drawType === 'normal') {
-      logDescription = `消耗1次全价抽卡次数，获得「${wish.name}」碎片(${newFragments}/${totalFragments})`;
+    if (drawType === 'half') {
+      logDescription = `消耗${costStars}颗星星和1次半价抽卡次数，获得「${wish.name}」碎片(${newFragments}/${totalFragments})`;
     } else {
-      logDescription = `消耗1次半价抽卡次数，获得「${wish.name}」碎片(${newFragments}/${totalFragments})`;
+      logDescription = `消耗${costStars}颗星星抽卡，获得「${wish.name}」碎片(${newFragments}/${totalFragments})`;
     }
 
     const log = {

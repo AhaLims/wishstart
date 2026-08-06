@@ -17,7 +17,6 @@ router.get('/:userId', async (req, res) => {
         name: '用户' + userId.substr(0, 4),
         total_stars: '0',
         current_stars: '0',
-        gems: '0',
         draw_count: '0',
         half_draw_count: '0',
         created_at: Date.now().toString(),
@@ -26,6 +25,10 @@ router.get('/:userId', async (req, res) => {
       await req.redis.hset(`${PREFIX}:${userId}`, newUser);
       return res.json({ code: 0, data: newUser });
     }
+
+    // 计算宝石数量 = 总星星 / 10
+    const totalStars = parseInt(user.total_stars) || 0;
+    user.gems = Math.floor(totalStars / 10).toString();
 
     res.json({ code: 0, data: user });
   } catch (error) {
@@ -63,7 +66,6 @@ router.post('/init/:userId', async (req, res) => {
       name: '用户' + userId.substr(0, 4),
       total_stars: '0',
       current_stars: '0',
-      gems: '0',
       draw_count: '0',
       half_draw_count: '0',
       created_at: Date.now().toString(),

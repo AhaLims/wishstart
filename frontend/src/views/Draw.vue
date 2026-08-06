@@ -2,24 +2,8 @@
   <div class="draw">
     <h1 class="page-title">抽卡</h1>
 
-    <!-- 抽卡次数显示 -->
+    <!-- 星星和抽卡次数显示 -->
     <div class="draw-counts">
-      <div class="count-card">
-        <span class="count-icon">🎴</span>
-        <div class="count-info">
-          <div class="count-value number">{{ stats?.drawCount || 0 }}</div>
-          <div class="count-label">全价抽卡</div>
-        </div>
-      </div>
-
-      <div class="count-card">
-        <span class="count-icon">半价</span>
-        <div class="count-info">
-          <div class="count-value number">{{ stats?.halfDrawCount || 0 }}</div>
-          <div class="count-label">半价抽卡</div>
-        </div>
-      </div>
-
       <div class="count-card">
         <span class="count-icon">⭐</span>
         <div class="count-info">
@@ -27,55 +11,34 @@
           <div class="count-label">可用星星</div>
         </div>
       </div>
+
+      <div class="count-card">
+        <span class="count-icon">🎲</span>
+        <div class="count-info">
+          <div class="count-value number">{{ stats?.halfDrawCount || 0 }}</div>
+          <div class="count-label">掷骰子次数</div>
+        </div>
+      </div>
     </div>
 
     <!-- 抽卡区域 -->
     <div class="draw-area">
-      <div class="draw-type-selector">
-        <button
-          :class="['type-btn', { active: drawType === 'stars' }]"
-          @click="drawType = 'stars'"
-        >
-          ⭐ 消耗星星
-        </button>
-        <button
-          :class="['type-btn', { active: drawType === 'count' }]"
-          @click="drawType = 'count'"
-        >
-          🎴 消耗次数
-        </button>
-      </div>
-
-      <!-- 星星抽卡价格 -->
-      <div v-if="drawType === 'stars'" class="price-info">
+      <!-- 抽卡价格选择 -->
+      <div class="price-info">
         <div class="price-option">
           <label class="price-label">
-            <input type="radio" v-model="starsDrawType" value="normal" />
+            <input type="radio" v-model="drawType" value="normal" />
             <span>全价抽卡</span>
             <span class="price">5 ⭐</span>
           </label>
         </div>
         <div class="price-option">
           <label class="price-label">
-            <input type="radio" v-model="starsDrawType" value="half" />
+            <input type="radio" v-model="drawType" value="half" />
             <span>半价抽卡</span>
             <span class="price">3 ⭐ + 1次半价次数</span>
           </label>
         </div>
-      </div>
-
-      <!-- 次数抽卡选择 -->
-      <div v-else class="count-options">
-        <label class="count-option">
-          <input type="radio" v-model="countDrawType" value="normal" />
-          <span>全价抽卡次数</span>
-          <span class="count-badge">{{ stats?.drawCount || 0 }}次</span>
-        </label>
-        <label class="count-option">
-          <input type="radio" v-model="countDrawType" value="half" />
-          <span>半价抽卡次数</span>
-          <span class="count-badge">{{ stats?.halfDrawCount || 0 }}次</span>
-        </label>
       </div>
 
       <button
@@ -107,29 +70,19 @@ import { useUserStore } from '../stores/user'
 import { drawApi } from '../api'
 
 const userStore = useUserStore()
-const drawType = ref('stars')
-const starsDrawType = ref('normal')
-const countDrawType = ref('normal')
+const drawType = ref('normal')
 const isDrawing = ref(false)
 const lastResult = ref(null)
 
 const stats = computed(() => userStore.stats)
 
 const canDraw = computed(() => {
-  if (drawType.value === 'stars') {
-    if (starsDrawType.value === 'normal') {
-      // 全价抽卡：5颗星星
-      return (stats.value?.currentStars || 0) >= 5
-    } else {
-      // 半价抽卡：3颗星星 + 1次半价抽卡次数
-      return (stats.value?.currentStars || 0) >= 3 && (stats.value?.halfDrawCount || 0) >= 1
-    }
+  if (drawType.value === 'normal') {
+    // 全价抽卡：5颗星星
+    return (stats.value?.currentStars || 0) >= 5
   } else {
-    if (countDrawType.value === 'normal') {
-      return (stats.value?.drawCount || 0) > 0
-    } else {
-      return (stats.value?.halfDrawCount || 0) > 0
-    }
+    // 半价抽卡：3颗星星 + 1次半价抽卡次数
+    return (stats.value?.currentStars || 0) >= 3 && (stats.value?.halfDrawCount || 0) >= 1
   }
 })
 
@@ -139,8 +92,8 @@ const doDraw = async () => {
   try {
     const res = await drawApi.draw({
       userId: userStore.userId,
-      type: drawType.value,
-      drawType: drawType.value === 'stars' ? starsDrawType.value : countDrawType.value
+      type: 'stars',
+      drawType: drawType.value
     })
 
     if (res.code === 0) {

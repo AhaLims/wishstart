@@ -7,7 +7,6 @@ const diceRoutes = require('./routes/dice');
 const wishRoutes = require('./routes/wishes');
 const drawRoutes = require('./routes/draws');
 const statsRoutes = require('./routes/stats');
-const gemRoutes = require('./routes/gems');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -70,7 +69,6 @@ app.use('/api/v1/dice', diceRoutes);
 app.use('/api/v1/wishes', wishRoutes);
 app.use('/api/v1/draws', drawRoutes);
 app.use('/api/v1/stats', statsRoutes);
-app.use('/api/v1/gems', gemRoutes);
 
 // 健康检查
 app.get('/health', (req, res) => {

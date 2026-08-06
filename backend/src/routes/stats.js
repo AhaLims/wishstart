@@ -39,12 +39,13 @@ router.get('/', async (req, res) => {
       }
     }
 
+    const totalStars = parseInt(user.total_stars) || 0;
+
     res.json({
       code: 0,
       data: {
-        totalStars: parseInt(user.total_stars) || 0,
+        totalStars,
         currentStars: parseInt(user.current_stars) || 0,
-        gems: parseInt(user.gems) || 0,
         drawCount: parseInt(user.draw_count) || 0,
         halfDrawCount: parseInt(user.half_draw_count) || 0,
         completedWishes,

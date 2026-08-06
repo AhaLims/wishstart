@@ -27,15 +27,10 @@ router.post('/quick', async (req, res) => {
     await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', starsEarned);
     await req.redis.hincrby(`wishstar:user:${userId}`, 'total_stars', starsEarned);
 
-    // 检查并自动兑换宝石
-    const currentStars = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'current_stars')) || 0;
-    if (currentStars >= 10) {
-      const gemsToAdd = Math.floor(currentStars / 10);
-      const remainingStars = currentStars % 10;
-      await req.redis.hset(`wishstar:user:${userId}`, {
-        current_stars: remainingStars.toString(),
-        gems: (parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'gems')) + gemsToAdd).toString()
-      });
+    // 每获得5颗星星，获得1次掷骰子次数
+    const diceCountToAdd = Math.floor(starsEarned / 5);
+    if (diceCountToAdd > 0) {
+      await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', diceCountToAdd);
     }
 
     // 记录到每日记录
