@@ -40,6 +40,18 @@ router.post('/', async (req, res) => {
     await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', starsEarned);
     await req.redis.hincrby(`wishstar:user:${userId}`, 'total_stars', starsEarned);
 
+    // 检查并自动兑换宝石（满10颗自动兑换）
+    const afterDiceStars = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'current_stars')) || 0;
+    if (afterDiceStars >= 10) {
+      const gemsToAdd = Math.floor(afterDiceStars / 10);
+      const remainingStars = afterDiceStars % 10;
+      const currentGems = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'gems')) || 0;
+      await req.redis.hset(`wishstar:user:${userId}`, {
+        current_stars: remainingStars.toString(),
+        gems: (currentGems + gemsToAdd).toString()
+      });
+    }
+
     // 记录骰子使用
     await req.redis.hset(`wishstar:dice:${userId}:${date}`, {
       used: '1',

@@ -13,7 +13,7 @@
       </div>
 
       <div class="count-card">
-        <span class="count-icon">�半</span>
+        <span class="count-icon">半价</span>
         <div class="count-info">
           <div class="count-value number">{{ stats?.halfDrawCount || 0 }}</div>
           <div class="count-label">半价抽卡</div>
@@ -52,14 +52,14 @@
           <label class="price-label">
             <input type="radio" v-model="starsDrawType" value="normal" />
             <span>全价抽卡</span>
-            <span class="price">10 ⭐</span>
+            <span class="price">5 ⭐</span>
           </label>
         </div>
         <div class="price-option">
           <label class="price-label">
             <input type="radio" v-model="starsDrawType" value="half" />
             <span>半价抽卡</span>
-            <span class="price">5 ⭐</span>
+            <span class="price">3 ⭐ + 1次半价次数</span>
           </label>
         </div>
       </div>
@@ -117,8 +117,13 @@ const stats = computed(() => userStore.stats)
 
 const canDraw = computed(() => {
   if (drawType.value === 'stars') {
-    const price = starsDrawType.value === 'normal' ? 10 : 5
-    return (stats.value?.currentStars || 0) >= price
+    if (starsDrawType.value === 'normal') {
+      // 全价抽卡：5颗星星
+      return (stats.value?.currentStars || 0) >= 5
+    } else {
+      // 半价抽卡：3颗星星 + 1次半价抽卡次数
+      return (stats.value?.currentStars || 0) >= 3 && (stats.value?.halfDrawCount || 0) >= 1
+    }
   } else {
     if (countDrawType.value === 'normal') {
       return (stats.value?.drawCount || 0) > 0
@@ -175,7 +180,7 @@ onMounted(() => {
 }
 
 .count-icon {
-  font-size: 2rem;
+  font-size: 1.5rem;
 }
 
 .count-value {

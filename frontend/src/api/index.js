@@ -36,7 +36,9 @@ export const recordApi = {
   quickRecord: (data) => api.post('/records/quick', data),
   getRecords: (userId, date) => api.get(`/records?userId=${userId}&date=${date}`),
   getRecordsRange: (userId, startDate, endDate) =>
-    api.get(`/records/range?userId=${userId}&startDate=${startDate}&endDate=${endDate}`)
+    api.get(`/records/range?userId=${userId}&startDate=${startDate}&endDate=${endDate}`),
+  deleteRecord: (recordId, userId, date) =>
+    api.delete(`/records/${recordId}?userId=${userId}&date=${date}`)
 }
 
 // 骰子API

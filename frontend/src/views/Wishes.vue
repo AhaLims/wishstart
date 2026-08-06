@@ -12,7 +12,7 @@
       <div v-for="wish in wishes" :key="wish.id" class="wish-card">
         <div class="wish-image">
           <img v-if="wish.image_url" :src="wish.image_url" :alt="wish.name" />
-          <div v-else class="wish-placeholder">🎁</div>
+          <div v-else class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
         </div>
 
         <div class="wish-info">
@@ -63,9 +63,42 @@
           <input v-model="newWish.name" class="input" placeholder="输入愿望名称" />
         </div>
 
+        <!-- 图标选择 -->
         <div class="form-group">
-          <label class="label">图片URL（可选）</label>
-          <input v-model="newWish.imageUrl" class="input" placeholder="输入图片链接" />
+          <label class="label">选择图标</label>
+          <div class="icon-selector">
+            <div
+              v-for="icon in iconOptions"
+              :key="icon"
+              class="icon-option"
+              :class="{ selected: newWish.icon === icon }"
+              @click="newWish.icon = icon; newWish.imageUrl = ''"
+            >
+              {{ icon }}
+            </div>
+          </div>
+        </div>
+
+        <!-- 图片上传 -->
+        <div class="form-group">
+          <label class="label">或上传图片</label>
+          <div class="upload-area" @click="triggerUpload" @dragover.prevent @drop.prevent="handleDrop">
+            <input
+              ref="fileInput"
+              type="file"
+              accept="image/*"
+              style="display: none"
+              @change="handleFileSelect"
+            />
+            <div v-if="newWish.imageUrl" class="preview-image">
+              <img :src="newWish.imageUrl" alt="预览" />
+              <button class="remove-image" @click.stop="newWish.imageUrl = ''">✕</button>
+            </div>
+            <div v-else class="upload-hint">
+              <span class="upload-icon">📷</span>
+              <span>点击或拖拽上传图片</span>
+            </div>
+          </div>
         </div>
 
         <div class="form-group">
@@ -90,10 +123,15 @@ import { wishApi } from '../api'
 const userStore = useUserStore()
 const wishes = ref([])
 const showAddModal = ref(false)
+const fileInput = ref(null)
+
+// 可爱图标选项
+const iconOptions = ['🎁', '🎀', '🎂', '🎉', '🎄', '🌸', '🌈', '⭐', '💎', '🎵', '🍰', '🍦', '🧸', '📱', '💻', '🎮']
 
 const newWish = ref({
   name: '',
   imageUrl: '',
+  icon: '🎁',
   totalFragments: 10
 })
 
@@ -114,7 +152,10 @@ const addWish = async () => {
   try {
     const res = await wishApi.createWish({
       userId: userStore.userId,
-      ...newWish.value
+      name: newWish.value.name,
+      imageUrl: newWish.value.imageUrl,
+      icon: newWish.value.imageUrl ? '' : newWish.value.icon,
+      totalFragments: newWish.value.totalFragments
     })
 
     if (res.code === 0) {
@@ -122,6 +163,7 @@ const addWish = async () => {
       newWish.value = {
         name: '',
         imageUrl: '',
+        icon: '🎁',
         totalFragments: 10
       }
       await fetchWishes()
@@ -160,6 +202,34 @@ const deleteWish = async (wishId) => {
   } catch (error) {
     alert('删除失败')
   }
+}
+
+// 图片上传处理
+const triggerUpload = () => {
+  fileInput.value?.click()
+}
+
+const handleFileSelect = (event) => {
+  const file = event.target.files[0]
+  if (file) {
+    handleFile(file)
+  }
+}
+
+const handleDrop = (event) => {
+  const file = event.dataTransfer.files[0]
+  if (file && file.type.startsWith('image/')) {
+    handleFile(file)
+  }
+}
+
+const handleFile = (file) => {
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    newWish.value.imageUrl = e.target.result
+    newWish.value.icon = ''
+  }
+  reader.readAsDataURL(file)
 }
 
 onMounted(() => {
@@ -269,5 +339,100 @@ onMounted(() => {
   display: flex;
   gap: 1rem;
   margin-top: 1.5rem;
+}
+
+/* 图标选择器 */
+.icon-selector {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0.5rem;
+}
+
+.icon-option {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  background: rgba(26, 26, 46, 0.8);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.icon-option:hover {
+  background: rgba(74, 144, 217, 0.2);
+}
+
+.icon-option.selected {
+  border-color: #4A90D9;
+  background: rgba(74, 144, 217, 0.3);
+}
+
+/* 图片上传区域 */
+.upload-area {
+  border: 2px dashed rgba(74, 144, 217, 0.3);
+  border-radius: 12px;
+  padding: 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.upload-area:hover {
+  border-color: #4A90D9;
+  background: rgba(74, 144, 217, 0.1);
+}
+
+.upload-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  color: #B0B0B0;
+}
+
+.upload-icon {
+  font-size: 2rem;
+}
+
+.preview-image {
+  position: relative;
+  width: 100%;
+  max-height: 150px;
+}
+
+.preview-image img {
+  width: 100%;
+  max-height: 150px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.remove-image {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(231, 76, 60, 0.8);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+}
+
+.remove-image:hover {
+  background: #E74C3C;
 }
 </style>

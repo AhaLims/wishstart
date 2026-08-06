@@ -47,8 +47,11 @@
             <span v-if="record.is_weekend_double" class="weekend-tag">周末加倍</span>
           </div>
         </div>
-        <div class="record-stars">
-          <span class="star-icon">+{{ record.stars }}</span>
+        <div class="record-actions">
+          <div class="record-stars">
+            <span class="star-icon">+{{ record.stars }}</span>
+          </div>
+          <button class="btn-delete" @click="deleteRecord(record.id)" title="删除">✕</button>
         </div>
       </div>
     </div>
@@ -100,6 +103,22 @@ const getPeriodText = (period) => {
     evening: '晚上'
   }
   return map[period] || ''
+}
+
+const deleteRecord = async (recordId) => {
+  if (!confirm('确定要删除这条记录吗？')) return
+
+  try {
+    const res = await recordApi.deleteRecord(recordId, userStore.userId, selectedDate.value)
+    if (res.code === 0) {
+      await fetchRecords()
+      await userStore.fetchStats()
+    } else {
+      alert(res.message || '删除失败')
+    }
+  } catch (error) {
+    alert('删除失败')
+  }
 }
 
 onMounted(() => {
@@ -193,9 +212,34 @@ onMounted(() => {
   color: #FFD700;
 }
 
+.record-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
 .record-stars {
   font-size: 1.5rem;
   font-weight: 700;
+}
+
+.btn-delete {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(231, 76, 60, 0.2);
+  color: #E74C3C;
+  cursor: pointer;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.btn-delete:hover {
+  background: rgba(231, 76, 60, 0.4);
 }
 
 @media (max-width: 768px) {

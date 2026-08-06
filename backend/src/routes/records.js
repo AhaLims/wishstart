@@ -27,6 +27,17 @@ router.post('/quick', async (req, res) => {
     await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', starsEarned);
     await req.redis.hincrby(`wishstar:user:${userId}`, 'total_stars', starsEarned);
 
+    // 检查并自动兑换宝石
+    const currentStars = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'current_stars')) || 0;
+    if (currentStars >= 10) {
+      const gemsToAdd = Math.floor(currentStars / 10);
+      const remainingStars = currentStars % 10;
+      await req.redis.hset(`wishstar:user:${userId}`, {
+        current_stars: remainingStars.toString(),
+        gems: (parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'gems')) + gemsToAdd).toString()
+      });
+    }
+
     // 记录到每日记录
     let period = 'morning';
     if (hour >= 12 && hour < 18) period = 'afternoon';
@@ -106,6 +117,44 @@ router.get('/', async (req, res) => {
         records: parsedRecords
       }
     });
+  } catch (error) {
+    res.status(500).json({ code: 1, message: error.message });
+  }
+});
+
+// 删除记录
+router.delete('/:recordId', async (req, res) => {
+  try {
+    const { recordId } = req.params;
+    const { userId, date } = req.query;
+
+    if (!userId || !date) {
+      return res.status(400).json({ code: 1, message: '缺少必要参数' });
+    }
+
+    // 找到并删除记录
+    const records = await req.redis.zrange(`wishstar:records:${userId}:${date}`, 0, -1);
+    let deleted = false;
+
+    for (const recordStr of records) {
+      const record = JSON.parse(recordStr);
+      if (record.id === recordId) {
+        await req.redis.zrem(`wishstar:records:${userId}:${date}`, recordStr);
+
+        // 扣除星星
+        await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -record.stars);
+        await req.redis.hincrby(`wishstar:user:${userId}`, 'total_stars', -record.stars);
+
+        deleted = true;
+        break;
+      }
+    }
+
+    if (deleted) {
+      res.json({ code: 0, message: '删除成功' });
+    } else {
+      res.json({ code: 1, message: '记录不存在' });
+    }
   } catch (error) {
     res.status(500).json({ code: 1, message: error.message });
   }

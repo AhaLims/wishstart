@@ -158,6 +158,18 @@ router.post('/:taskId/complete', async (req, res) => {
     await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', starsEarned);
     await req.redis.hincrby(`wishstar:user:${userId}`, 'total_stars', starsEarned);
 
+    // 检查并自动兑换宝石（满10颗自动兑换）
+    const currentStars = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'current_stars')) || 0;
+    if (currentStars >= 10) {
+      const gemsToAdd = Math.floor(currentStars / 10);
+      const remainingStars = currentStars % 10;
+      const currentGems = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'gems')) || 0;
+      await req.redis.hset(`wishstar:user:${userId}`, {
+        current_stars: remainingStars.toString(),
+        gems: (currentGems + gemsToAdd).toString()
+      });
+    }
+
     // 更新任务完成次数
     const newComplete = currentComplete + 1;
     await req.redis.hset(`${PREFIX}:${taskId}`, 'current_complete', newComplete.toString());

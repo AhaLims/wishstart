@@ -43,11 +43,23 @@ router.post('/', async (req, res) => {
       const stars = parseInt(currentStars) || 0;
 
       // 根据抽卡类型决定消耗
+      // 全价抽卡：5颗星星，半价抽卡：3颗星星
       const priceMap = {
-        normal: 10,  // 全价抽卡消耗10颗星
-        half: 5      // 半价抽卡消耗5颗星
+        normal: 5,   // 全价抽卡消耗5颗星
+        half: 3      // 半价抽卡消耗3颗星
       };
-      costStars = priceMap[drawType] || 10;
+      costStars = priceMap[drawType] || 5;
+
+      // 半价抽卡需要消耗半价抽卡次数
+      if (drawType === 'half') {
+        const halfDrawCount = await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count');
+        const count = parseInt(halfDrawCount) || 0;
+        if (count < 1) {
+          return res.json({ code: 1, message: '半价抽卡次数不足' });
+        }
+        await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', -1);
+        costHalfDrawCount = 1;
+      }
 
       if (stars < costStars) {
         return res.json({ code: 1, message: `星星不足，需要${costStars}颗星星` });
