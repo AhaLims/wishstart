@@ -57,7 +57,7 @@
       <div class="result-fragments">
         获得碎片：{{ lastResult.currentFragments }} / {{ lastResult.totalFragments }}
       </div>
-      <div v-if="lastResult.isCompleted" class="complete-badge">
+      <div v-if="lastResult.isReady" class="complete-badge">
         🎊 愿望已集满，可以合成了！
       </div>
     </div>

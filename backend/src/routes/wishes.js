@@ -129,6 +129,10 @@ router.post('/:wishId/complete', async (req, res) => {
       return res.status(404).json({ code: 1, message: '愿望不存在' });
     }
 
+    if (wish.status === 'completed') {
+      return res.json({ code: 1, message: '愿望已完成，无需重复合成' });
+    }
+
     const totalFragments = parseInt(wish.total_fragments) || 10;
     const currentFragments = parseInt(wish.current_fragments) || 0;
 

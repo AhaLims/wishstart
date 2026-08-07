@@ -7,42 +7,45 @@
       <button class="btn btn-primary" @click="showAddModal = true">+ 添加愿望</button>
     </div>
 
-    <!-- 愿望列表 -->
-    <div v-if="wishes.length" class="wishes-grid">
-      <div v-for="wish in wishes" :key="wish.id" class="wish-card">
-        <div class="wish-image">
-          <div class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
-        </div>
+    <!-- 进行中的愿望 -->
+    <div v-if="activeWishes.length" class="wishes-section">
+      <h2 class="section-title">收集中</h2>
+      <div class="wishes-grid">
+        <div v-for="wish in activeWishes" :key="wish.id" class="wish-card">
+          <div class="wish-image">
+            <div class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
+          </div>
 
-        <div class="wish-info">
-          <h3 class="wish-name">{{ wish.name }}</h3>
+          <div class="wish-info">
+            <h3 class="wish-name">{{ wish.name }}</h3>
 
-          <div class="wish-progress">
-            <div class="progress-bar">
-              <div
-                class="progress-fill"
-                :style="{ width: (wish.current_fragments / wish.total_fragments * 100) + '%' }"
-              ></div>
+            <div class="wish-progress">
+              <div class="progress-bar">
+                <div
+                  class="progress-fill"
+                  :style="{ width: (wish.current_fragments / wish.total_fragments * 100) + '%' }"
+                ></div>
+              </div>
+              <div class="progress-text">
+                {{ wish.current_fragments }} / {{ wish.total_fragments }} 碎片
+              </div>
             </div>
-            <div class="progress-text">
-              {{ wish.current_fragments }} / {{ wish.total_fragments }} 碎片
+
+            <div class="wish-status collecting" :class="{ ready: isWishReady(wish) }">
+              {{ isWishReady(wish) ? '✨ 已集满，可以合成' : '📥 收集中' }}
             </div>
           </div>
 
-          <div class="wish-status" :class="wish.status">
-            {{ wish.status === 'completed' ? '✅ 已完成' : '📥 收集中' }}
+          <div class="wish-actions">
+            <button
+              v-if="parseInt(wish.current_fragments) >= parseInt(wish.total_fragments)"
+              class="btn btn-success"
+              @click="completeWish(wish.id)"
+            >
+              合成愿望
+            </button>
+            <button class="btn btn-danger" @click="deleteWish(wish.id)">删除</button>
           </div>
-        </div>
-
-        <div class="wish-actions">
-          <button
-            v-if="wish.status !== 'completed' && parseInt(wish.current_fragments) >= parseInt(wish.total_fragments)"
-            class="btn btn-success"
-            @click="completeWish(wish.id)"
-          >
-            合成愿望
-          </button>
-          <button class="btn btn-danger" @click="deleteWish(wish.id)">删除</button>
         </div>
       </div>
     </div>
@@ -50,6 +53,39 @@
     <div v-else class="empty-state">
       <div class="empty-state-icon">🎁</div>
       <p>还没有愿望，快添加一个吧！</p>
+    </div>
+
+    <!-- 已完成的愿望 -->
+    <div v-if="completedWishes.length" class="wishes-section">
+      <h2 class="section-title">已完成</h2>
+      <div class="wishes-grid completed-grid">
+        <div v-for="wish in completedWishes" :key="wish.id" class="wish-card completed">
+          <div class="wish-image">
+            <div class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
+          </div>
+
+          <div class="wish-info">
+            <h3 class="wish-name">{{ wish.name }}</h3>
+
+            <div class="wish-progress">
+              <div class="progress-bar">
+                <div class="progress-fill completed-fill" style="width: 100%"></div>
+              </div>
+              <div class="progress-text">
+                {{ wish.total_fragments }} / {{ wish.total_fragments }} 碎片
+              </div>
+            </div>
+
+            <div class="wish-status completed">
+              ✅ 已完成
+            </div>
+          </div>
+
+          <div class="wish-actions">
+            <button class="btn btn-danger" @click="deleteWish(wish.id)">删除</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 添加愿望弹框 -->
@@ -93,7 +129,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useUserStore } from '../stores/user'
 import { wishApi } from '../api'
 
@@ -109,6 +145,21 @@ const newWish = ref({
   icon: '🎁',
   totalFragments: 10
 })
+
+// 过滤进行中的愿望
+const activeWishes = computed(() => {
+  return wishes.value.filter(w => w.status !== 'completed')
+})
+
+// 过滤已完成的愿望
+const completedWishes = computed(() => {
+  return wishes.value.filter(w => w.status === 'completed')
+})
+
+// 是否已集满（待合成）
+const isWishReady = (wish) => {
+  return parseInt(wish.current_fragments) >= parseInt(wish.total_fragments)
+}
 
 const fetchWishes = async () => {
   try {
@@ -187,6 +238,16 @@ onMounted(() => {
   margin-bottom: 1.5rem;
 }
 
+.wishes-section {
+  margin-bottom: 2rem;
+}
+
+.section-title {
+  font-size: 1.3rem;
+  color: #B0B0B0;
+  margin-bottom: 1rem;
+}
+
 .wishes-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -198,6 +259,10 @@ onMounted(() => {
   border-radius: 16px;
   padding: 1.5rem;
   border: 1px solid rgba(74, 144, 217, 0.2);
+}
+
+.wish-card.completed {
+  border-color: rgba(46, 204, 113, 0.3);
 }
 
 .wish-image {
@@ -240,6 +305,10 @@ onMounted(() => {
   transition: width 0.3s ease;
 }
 
+.progress-fill.completed-fill {
+  background: linear-gradient(90deg, #2ECC71, #27AE60);
+}
+
 .progress-text {
   text-align: center;
   font-size: 0.9rem;
@@ -262,6 +331,11 @@ onMounted(() => {
 .wish-status.collecting {
   background: rgba(74, 144, 217, 0.2);
   color: #4A90D9;
+}
+
+.wish-status.ready {
+  background: rgba(255, 215, 0, 0.2);
+  color: #FFD700;
 }
 
 .wish-actions {

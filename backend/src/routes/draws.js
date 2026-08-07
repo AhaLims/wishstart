@@ -18,14 +18,29 @@ router.post('/', async (req, res) => {
     const now = Date.now();
     const timestamp = now;
 
-    // 获取用户愿望列表
+    // 获取用户愿望列表（只抽取收集中(未满)的愿望）
     const wishIds = await req.redis.smembers(`wishstar:wishes:index:${userId}`);
-    if (wishIds.length === 0) {
-      return res.json({ code: 1, message: '请先创建愿望' });
+
+    // 只抽取「收集中且未集满」的愿望（不包括 ready 和 completed）
+    const collectingWishIds = [];
+    for (const wishId of wishIds) {
+      const wish = await req.redis.hgetall(`wishstar:wish:${wishId}`);
+      if (
+        wish &&
+        wish.id &&
+        wish.status === 'collecting' &&
+        (parseInt(wish.current_fragments) || 0) < (parseInt(wish.total_fragments) || 10)
+      ) {
+        collectingWishIds.push(wishId);
+      }
+    }
+
+    if (collectingWishIds.length === 0) {
+      return res.json({ code: 1, message: '没有进行中的愿望' });
     }
 
     // 随机选择一个愿望
-    const randomWishId = wishIds[Math.floor(Math.random() * wishIds.length)];
+    const randomWishId = collectingWishIds[Math.floor(Math.random() * collectingWishIds.length)];
     const wish = await req.redis.hgetall(`wishstar:wish:${randomWishId}`);
 
     if (!wish || !wish.id) {
@@ -67,13 +82,13 @@ router.post('/', async (req, res) => {
     await req.redis.hset(`wishstar:wish:${randomWishId}`, 'updated_at', now.toString());
 
     const totalFragments = parseInt(wish.total_fragments) || 10;
-    const isCompleted = newFragments >= totalFragments;
+    const isFull = newFragments >= totalFragments;
 
-    // 如果完成，更新状态
-    if (isCompleted) {
+    // 如果集满，进入「已集满待合成」状态（ready），等待用户手动合成
+    if (isFull) {
       await req.redis.hset(`wishstar:wish:${randomWishId}`, {
-        status: 'completed',
-        completed_at: now.toString()
+        status: 'ready',
+        updated_at: now.toString()
       });
     }
 
@@ -117,7 +132,7 @@ router.post('/', async (req, res) => {
         fragmentIndex: newFragments,
         currentFragments: newFragments,
         totalFragments,
-        isCompleted
+        isReady: isFull
       }
     });
   } catch (error) {
