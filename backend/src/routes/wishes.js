@@ -82,15 +82,16 @@ router.get('/:wishId', async (req, res) => {
 router.put('/:wishId', async (req, res) => {
   try {
     const { wishId } = req.params;
-    const { name, imageUrl, totalFragments } = req.body;
+    const { name, icon, totalFragments, currentFragments } = req.body;
 
     const updates = {
       updated_at: Date.now().toString()
     };
 
     if (name) updates.name = name;
-    if (imageUrl !== undefined) updates.image_url = imageUrl;
-    if (totalFragments) updates.total_fragments = totalFragments.toString();
+    if (icon !== undefined) updates.icon = icon;
+    if (totalFragments !== undefined) updates.total_fragments = totalFragments.toString();
+    if (currentFragments !== undefined) updates.current_fragments = currentFragments.toString();
 
     await req.redis.hset(`${PREFIX}:${wishId}`, updates);
 

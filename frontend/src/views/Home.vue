@@ -16,7 +16,7 @@
         <div class="resource-icon">🎲</div>
         <div class="resource-info">
           <div class="resource-label">掷骰子次数</div>
-          <div class="resource-value number">{{ stats?.halfDrawCount || 0 }}</div>
+          <div class="resource-value number">{{ stats?.diceCount || 0 }}</div>
         </div>
       </div>
     </div>

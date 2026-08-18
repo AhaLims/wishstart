@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
+const { ensureToday } = require('../services/dailyState');
 
 const PREFIX = 'wishstar:task';
 
@@ -16,7 +17,7 @@ router.post('/', async (req, res) => {
       id: taskId,
       user_id: userId,
       name: name,
-      stars_per_complete: starsPerComplete || 5,
+      stars_per_complete: starsPerComplete !== undefined ? starsPerComplete : 5,
       max_complete: maxComplete || 0,
       current_complete: '0',
       reward_stars: rewardStars ? '1' : '0',
@@ -88,7 +89,7 @@ router.put('/:taskId', async (req, res) => {
     };
 
     if (name) updates.name = name;
-    if (starsPerComplete) updates.stars_per_complete = starsPerComplete;
+    if (starsPerComplete !== undefined) updates.stars_per_complete = starsPerComplete;
     if (maxComplete !== undefined) updates.max_complete = maxComplete;
     if (rewardStars !== undefined) updates.reward_stars = rewardStars ? '1' : '0';
     if (rewardHalfDraw !== undefined) updates.reward_half_draw = rewardHalfDraw ? '1' : '0';
@@ -148,20 +149,33 @@ router.post('/:taskId/complete', async (req, res) => {
     const timestamp = now.getTime();
 
     // 计算获得的星星
-    let starsEarned = parseInt(task.stars_per_complete) || 5;
+    let starsEarned = parseInt(task.stars_per_complete);
+    if (isNaN(starsEarned)) starsEarned = 5;
     const isWeekend = now.getDay() === 0 || now.getDay() === 6;
     if (isWeekend) {
       starsEarned *= 2;
     }
 
+    // 检查并重置今日星星和掷骰子计数（统一按 last_daily_date 判断跨天）
+    const today = now.toISOString().split('T')[0];
+    await ensureToday(req.redis, userId, today);
+
     // 更新用户星星
     await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', starsEarned);
     await req.redis.hincrby(`wishstar:user:${userId}`, 'total_stars', starsEarned);
+    // 记录今天获得的星星（用于判断是否能掷骰子）
+    const newTodayStars = await req.redis.hincrby(`wishstar:user:${userId}`, 'today_stars', starsEarned);
 
-    // 每获得5颗星星，获得1次掷骰子次数
-    const diceCountToAdd = Math.floor(starsEarned / 5);
+    // 计算今天累计可以获得的掷骰子次数（每5颗星星获得1次掷骰子机会）
+    const totalDiceCanGet = Math.floor(newTodayStars / 5);
+    // 获取已经获得的掷骰子次数
+    const earnedDiceCount = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'earned_dice_count')) || 0;
+    // 计算还可以获得的次数
+    const diceCountToAdd = totalDiceCanGet - earnedDiceCount;
     if (diceCountToAdd > 0) {
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', diceCountToAdd);
+      // 只增加掷骰子次数，不增加半价抽卡次数
+      await req.redis.hincrby(`wishstar:user:${userId}`, 'today_dice_count', diceCountToAdd);
+      await req.redis.hincrby(`wishstar:user:${userId}`, 'earned_dice_count', diceCountToAdd);
     }
 
     // 更新任务完成次数
@@ -228,10 +242,13 @@ router.post('/:taskId/complete', async (req, res) => {
   }
 });
 
-// 判断时段
+// 判断时段：早上4-13点，下午13-18点，晚上18-24点
+// 注意：中国时区是 UTC+8
 function getPeriod(hour) {
-  if (hour < 12) return 'morning';
-  if (hour < 18) return 'afternoon';
+  // 转换为北京时间（UTC+8）
+  const beijingHour = (hour + 8) % 24;
+  if (beijingHour >= 4 && beijingHour < 13) return 'morning';
+  if (beijingHour >= 13 && beijingHour < 18) return 'afternoon';
   return 'evening';
 }
 

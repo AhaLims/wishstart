@@ -65,31 +65,31 @@
         </div>
 
         <div class="form-group">
-          <label class="label">完成一次获得星星</label>
-          <input v-model.number="newTask.starsPerComplete" type="number" class="input" />
-        </div>
-
-        <div class="form-group">
           <label class="label">限制完成次数（0或不填表示不限制）</label>
           <input v-model.number="newTask.maxComplete" type="number" class="input" />
         </div>
 
         <div class="form-group">
-          <label class="label">奖励（可多选）</label>
-          <div class="checkbox-group">
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="newTask.rewardStars" />
+          <label class="label">奖励（单选）</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" value="stars" v-model="newTask.rewardType" />
               ⭐ 星星
             </label>
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="newTask.rewardHalfDraw" />
+            <label class="radio-label">
+              <input type="radio" value="halfDraw" v-model="newTask.rewardType" />
               🎴 半价抽卡
             </label>
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="newTask.rewardDraw" />
+            <label class="radio-label">
+              <input type="radio" value="draw" v-model="newTask.rewardType" />
               🎴 抽卡次数
             </label>
           </div>
+        </div>
+
+        <div class="form-group" v-if="newTask.rewardType === 'stars'">
+          <label class="label">完成一次获得星星</label>
+          <input v-model.number="newTask.starsPerComplete" type="number" class="input" />
         </div>
 
         <div class="modal-actions">
@@ -112,11 +112,9 @@ const showAddModal = ref(false)
 
 const newTask = ref({
   name: '',
-  starsPerComplete: 5,
+  starsPerComplete: 1,
   maxComplete: 0,
-  rewardStars: true,
-  rewardHalfDraw: false,
-  rewardDraw: false
+  rewardType: 'stars'
 })
 
 const fetchTasks = async () => {
@@ -133,21 +131,27 @@ const fetchTasks = async () => {
 const addTask = async () => {
   if (!newTask.value.name) return
 
+  // 根据奖励类型转换数据
+  const taskData = {
+    userId: userStore.userId,
+    name: newTask.value.name,
+    maxComplete: newTask.value.maxComplete,
+    starsPerComplete: newTask.value.rewardType === 'stars' ? newTask.value.starsPerComplete : 0,
+    rewardStars: newTask.value.rewardType === 'stars',
+    rewardHalfDraw: newTask.value.rewardType === 'halfDraw',
+    rewardDraw: newTask.value.rewardType === 'draw'
+  }
+
   try {
-    const res = await taskApi.createTask({
-      userId: userStore.userId,
-      ...newTask.value
-    })
+    const res = await taskApi.createTask(taskData)
 
     if (res.code === 0) {
       showAddModal.value = false
       newTask.value = {
         name: '',
-        starsPerComplete: 5,
+        starsPerComplete: 1,
         maxComplete: 0,
-        rewardStars: true,
-        rewardHalfDraw: false,
-        rewardDraw: false
+        rewardType: 'stars'
       }
       await fetchTasks()
       await userStore.fetchStats()
@@ -164,7 +168,31 @@ const completeTask = async (taskId) => {
     const res = await taskApi.completeTask(taskId)
 
     if (res.code === 0) {
-      alert(`获得 ${res.data.starsEarned} 颗星星！${res.data.isWeekendDouble ? '（周末加倍）' : ''}`)
+      let message = ''
+      const hasStarsReward = res.data.rewards && res.data.rewards.includes('星星')
+      const hasHalfDrawReward = res.data.rewards && res.data.rewards.includes('半价抽卡')
+      const hasDrawReward = res.data.rewards && res.data.rewards.includes('抽卡')
+
+      if (res.data.starsEarned > 0) {
+        // 有星星奖励
+        message = `获得 ${res.data.starsEarned} 颗星星！${res.data.isWeekendDouble ? '（周末加倍）' : ''}`
+        // 如果还有其他奖励
+        const otherRewards = []
+        if (hasHalfDrawReward) otherRewards.push('半价抽卡')
+        if (hasDrawReward) otherRewards.push('抽卡')
+        if (otherRewards.length > 0) {
+          message += `，还获得：${otherRewards.join('、')}`
+        }
+      } else if (hasHalfDrawReward || hasDrawReward) {
+        // 只有半价抽卡或抽卡奖励，没有星星
+        const otherRewards = []
+        if (hasHalfDrawReward) otherRewards.push('半价抽卡')
+        if (hasDrawReward) otherRewards.push('抽卡')
+        message = `完成任务！获得：${otherRewards.join('、')}`
+      } else {
+        message = '任务完成！'
+      }
+      alert(message)
       await fetchTasks()
       await userStore.fetchStats()
     } else {

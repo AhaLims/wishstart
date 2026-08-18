@@ -44,6 +44,7 @@ export const recordApi = {
 // 骰子API
 export const diceApi = {
   roll: (userId) => api.post('/dice', { userId }),
+  submitManual: (userId, diceValue) => api.post('/dice/manual', { userId, diceValue }),
   checkStatus: (userId, date) => api.get(`/dice?userId=${userId}&date=${date}`)
 }
 
@@ -60,6 +61,7 @@ export const wishApi = {
 // 抽卡API
 export const drawApi = {
   draw: (data) => api.post('/draws', data),
+  submitManual: (data) => api.post('/draws/manual', data),
   getDraws: (userId, limit) => api.get(`/draws?userId=${userId}&limit=${limit || 20}`)
 }
 

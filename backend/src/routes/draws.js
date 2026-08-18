@@ -159,4 +159,113 @@ router.get('/', async (req, res) => {
   }
 });
 
+// 线下抽卡记录
+router.post('/manual', async (req, res) => {
+  try {
+    const { userId, wishId, drawType } = req.body;
+
+    if (!userId || !wishId) {
+      return res.status(400).json({ code: 1, message: '缺少必要参数' });
+    }
+
+    const currentStars = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'current_stars')) || 0;
+    const drawCount = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'draw_count')) || 0;
+    const halfDrawCount = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count')) || 0;
+
+    // 根据消耗方式检查资源
+    if (drawType === 'free') {
+      // 免费抽卡：消耗1次抽卡次数
+      if (drawCount < 1) {
+        return res.json({ code: 1, message: '抽卡次数不足' });
+      }
+      await req.redis.hincrby(`wishstar:user:${userId}`, 'draw_count', -1);
+    } else if (drawType === 'normal') {
+      // 全价抽卡：消耗5颗星星
+      if (currentStars < 5) {
+        return res.json({ code: 1, message: '星星不足，需要5颗星星' });
+      }
+      await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -5);
+    } else if (drawType === 'half') {
+      // 半价抽卡：消耗3颗星星+1次半价次数
+      if (currentStars < 3) {
+        return res.json({ code: 1, message: '星星不足，需要3颗星星' });
+      }
+      if (halfDrawCount < 1) {
+        return res.json({ code: 1, message: '半价抽卡次数不足' });
+      }
+      await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -3);
+      await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', -1);
+    }
+
+    // 获取愿望信息
+    const wish = await req.redis.hgetall(`wishstar:wish:${wishId}`);
+    if (!wish || !wish.id) {
+      return res.json({ code: 1, message: '愿望不存在' });
+    }
+
+    const now = Date.now();
+
+    // 增加1个碎片
+    const newFragments = await req.redis.hincrby(`wishstar:wish:${wishId}`, 'current_fragments', 1);
+    await req.redis.hset(`wishstar:wish:${wishId}`, 'updated_at', now.toString());
+
+    const totalFragments = parseInt(wish.total_fragments) || 10;
+    const isFull = newFragments >= totalFragments;
+
+    // 如果集满，进入「已集满待合成」状态
+    if (isFull) {
+      await req.redis.hset(`wishstar:wish:${wishId}`, {
+        status: 'ready',
+        updated_at: now.toString()
+      });
+    }
+
+    // 记录抽卡
+    const drawRecord = {
+      id: uuidv4(),
+      wish_id: wishId,
+      wish_name: wish.name,
+      fragment_index: newFragments,
+      type: 'manual',
+      draw_type: drawType,
+      created_at: now
+    };
+
+    await req.redis.lpush(`wishstar:draws:${userId}`, JSON.stringify(drawRecord));
+
+    // 记录流水
+    let logDescription = '';
+    if (drawType === 'free') {
+      logDescription = `线下抽卡记录：消耗1次抽卡次数，「${wish.name}」获得1个碎片(${newFragments}/${totalFragments})`;
+    } else if (drawType === 'normal') {
+      logDescription = `线下抽卡记录：消耗5颗星星，「${wish.name}」获得1个碎片(${newFragments}/${totalFragments})`;
+    } else if (drawType === 'half') {
+      logDescription = `线下抽卡记录：消耗3颗星星+1次半价次数，「${wish.name}」获得1个碎片(${newFragments}/${totalFragments})`;
+    }
+
+    const log = {
+      id: uuidv4(),
+      type: 'expenditure',
+      category: 'draw',
+      amount: 0,
+      description: logDescription,
+      created_at: now
+    };
+    await req.redis.zadd(`wishstar:logs:${userId}`, now, JSON.stringify(log));
+
+    res.json({
+      code: 0,
+      data: {
+        wishId,
+        wishName: wish.name,
+        currentFragments: newFragments,
+        totalFragments,
+        isReady: isFull
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ code: 1, message: error.message });
+  }
+});
+
 module.exports = router;

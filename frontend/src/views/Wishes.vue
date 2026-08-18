@@ -44,6 +44,7 @@
             >
               合成愿望
             </button>
+            <button class="btn" @click="openEditModal(wish)">编辑</button>
             <button class="btn btn-danger" @click="deleteWish(wish.id)">删除</button>
           </div>
         </div>
@@ -125,6 +126,49 @@
         </div>
       </div>
     </div>
+
+    <!-- 编辑愿望弹框 -->
+    <div v-if="showEditModal" class="modal-overlay" @click.self="showEditModal = false">
+      <div class="modal">
+        <h3 class="modal-title">编辑愿望</h3>
+
+        <div class="form-group">
+          <label class="label">愿望名称</label>
+          <input v-model="editWish.name" class="input" placeholder="输入愿望名称" />
+        </div>
+
+        <!-- 图标选择 -->
+        <div class="form-group">
+          <label class="label">选择图标</label>
+          <div class="icon-selector">
+            <div
+              v-for="icon in iconOptions"
+              :key="icon"
+              class="icon-option"
+              :class="{ selected: editWish.icon === icon }"
+              @click="editWish.icon = icon"
+            >
+              {{ icon }}
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="label">需要碎片数量</label>
+          <input v-model.number="editWish.totalFragments" type="number" class="input" />
+        </div>
+
+        <div class="form-group">
+          <label class="label">当前已有碎片</label>
+          <input v-model.number="editWish.currentFragments" type="number" class="input" />
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn btn-primary" @click="updateWish">保存</button>
+          <button class="btn" @click="showEditModal = false">取消</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -136,6 +180,7 @@ import { wishApi } from '../api'
 const userStore = useUserStore()
 const wishes = ref([])
 const showAddModal = ref(false)
+const showEditModal = ref(false)
 
 // 可爱图标选项
 const iconOptions = ['🎁', '🎀', '🎂', '🎉', '🎄', '🌸', '🌈', '⭐', '💎', '🎵', '🍰', '🍦', '🧸', '📱', '💻', '🎮']
@@ -144,6 +189,14 @@ const newWish = ref({
   name: '',
   icon: '🎁',
   totalFragments: 10
+})
+
+const editWish = ref({
+  id: '',
+  name: '',
+  icon: '',
+  totalFragments: 10,
+  currentFragments: 0
 })
 
 // 过滤进行中的愿望
@@ -225,6 +278,39 @@ const deleteWish = async (wishId) => {
     }
   } catch (error) {
     alert('删除失败')
+  }
+}
+
+const openEditModal = (wish) => {
+  editWish.value = {
+    id: wish.id,
+    name: wish.name,
+    icon: wish.icon || '🎁',
+    totalFragments: parseInt(wish.total_fragments),
+    currentFragments: parseInt(wish.current_fragments)
+  }
+  showEditModal.value = true
+}
+
+const updateWish = async () => {
+  if (!editWish.value.name) return
+
+  try {
+    const res = await wishApi.updateWish(editWish.value.id, {
+      name: editWish.value.name,
+      icon: editWish.value.icon,
+      totalFragments: editWish.value.totalFragments,
+      currentFragments: editWish.value.currentFragments
+    })
+
+    if (res.code === 0) {
+      showEditModal.value = false
+      await fetchWishes()
+    } else {
+      alert(res.message || '更新失败')
+    }
+  } catch (error) {
+    alert('更新失败')
   }
 }
 

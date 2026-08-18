@@ -15,8 +15,24 @@
       <div class="count-card">
         <span class="count-icon">🎲</span>
         <div class="count-info">
-          <div class="count-value number">{{ stats?.halfDrawCount || 0 }}</div>
+          <div class="count-value number">{{ stats?.diceCount || 0 }}</div>
           <div class="count-label">掷骰子次数</div>
+        </div>
+      </div>
+
+      <div class="count-card">
+        <span class="count-icon">🎴</span>
+        <div class="count-info">
+          <div class="count-value number">{{ stats?.drawCount || 0 }}</div>
+          <div class="count-label">免费抽卡次数</div>
+        </div>
+      </div>
+
+      <div class="count-card">
+        <span class="count-icon">💰</span>
+        <div class="count-info">
+          <div class="count-value number">{{ stats?.halfDrawCount || 0 }}</div>
+          <div class="count-label">半价抽卡次数</div>
         </div>
       </div>
     </div>
@@ -27,14 +43,21 @@
       <div class="price-info">
         <div class="price-option">
           <label class="price-label">
-            <input type="radio" v-model="drawType" value="normal" />
+            <input type="radio" value="free" v-model="drawType" />
+            <span>免费抽卡</span>
+            <span class="price">1次抽卡次数</span>
+          </label>
+        </div>
+        <div class="price-option">
+          <label class="price-label">
+            <input type="radio" value="normal" v-model="drawType" />
             <span>全价抽卡</span>
             <span class="price">5 ⭐</span>
           </label>
         </div>
         <div class="price-option">
           <label class="price-label">
-            <input type="radio" v-model="drawType" value="half" />
+            <input type="radio" value="half" v-model="drawType" />
             <span>半价抽卡</span>
             <span class="price">3 ⭐ + 1次半价次数</span>
           </label>
@@ -47,6 +70,30 @@
         @click="doDraw"
       >
         {{ isDrawing ? '抽卡中...' : '开始抽卡' }}
+      </button>
+    </div>
+
+    <!-- 线下抽卡记录区域 -->
+    <div class="draw-area manual-section">
+      <h3>线下抽卡记录</h3>
+      <p class="hint">如果你在线下抽了卡，可以在这里记录（使用上方选择的消耗方式）</p>
+
+      <div class="form-group">
+        <label class="label">选择愿望</label>
+        <select v-model="selectedWishId" class="input">
+          <option value="">请选择愿望</option>
+          <option v-for="wish in wishes" :key="wish.id" :value="wish.id">
+            {{ wish.name }} ({{ wish.current_fragments }}/{{ wish.total_fragments }})
+          </option>
+        </select>
+      </div>
+
+      <button
+        class="btn btn-primary"
+        :disabled="!canSubmitManual"
+        @click="submitManualDraw"
+      >
+        记录抽卡（默认+1碎片）
       </button>
     </div>
 
@@ -67,17 +114,23 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useUserStore } from '../stores/user'
-import { drawApi } from '../api'
+import { drawApi, wishApi } from '../api'
 
 const userStore = useUserStore()
 const drawType = ref('normal')
 const isDrawing = ref(false)
 const lastResult = ref(null)
+const wishes = ref([])
+const selectedWishId = ref('')
 
 const stats = computed(() => userStore.stats)
 
+// 抽卡按钮是否可用（线上抽卡和线下记录共用）
 const canDraw = computed(() => {
-  if (drawType.value === 'normal') {
+  if (drawType.value === 'free') {
+    // 免费抽卡：1次抽卡次数
+    return (stats.value?.drawCount || 0) >= 1
+  } else if (drawType.value === 'normal') {
     // 全价抽卡：5颗星星
     return (stats.value?.currentStars || 0) >= 5
   } else {
@@ -85,6 +138,19 @@ const canDraw = computed(() => {
     return (stats.value?.currentStars || 0) >= 3 && (stats.value?.halfDrawCount || 0) >= 1
   }
 })
+
+// 线下抽卡记录按钮是否可用（复用 canDraw 逻辑）
+const canSubmitManual = computed(() => {
+  if (!selectedWishId.value) return false
+  return canDraw.value
+})
+
+const fetchWishes = async () => {
+  const res = await wishApi.getWishes(userStore.userId)
+  if (res.code === 0) {
+    wishes.value = res.data.filter(w => w.status !== 'completed')
+  }
+}
 
 const doDraw = async () => {
   isDrawing.value = true
@@ -109,8 +175,35 @@ const doDraw = async () => {
   }
 }
 
+const submitManualDraw = async () => {
+  if (!selectedWishId.value) {
+    alert('请选择愿望')
+    return
+  }
+
+  try {
+    const res = await drawApi.submitManual({
+      userId: userStore.userId,
+      wishId: selectedWishId.value,
+      drawType: drawType.value
+    })
+
+    if (res.code === 0) {
+      alert(`记录成功！${res.data.wishName} 获得 1 个碎片`)
+      selectedWishId.value = ''
+      await userStore.fetchStats()
+      await fetchWishes()
+    } else {
+      alert(res.message || '记录失败')
+    }
+  } catch (error) {
+    alert('记录失败')
+  }
+}
+
 onMounted(() => {
   userStore.fetchStats()
+  fetchWishes()
 })
 </script>
 

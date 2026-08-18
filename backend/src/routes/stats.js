@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { ensureToday } = require('../services/dailyState');
 
 // 获取用户统计
 router.get('/', async (req, res) => {
@@ -9,6 +10,12 @@ router.get('/', async (req, res) => {
     if (!userId) {
       return res.status(400).json({ code: 1, message: '缺少userId参数' });
     }
+
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+
+    // 检查并重置今日掷骰子计数（统一按 last_daily_date 判断跨天）
+    await ensureToday(req.redis, userId, today);
 
     // 获取用户信息
     const user = await req.redis.hgetall(`wishstar:user:${userId}`);
@@ -40,6 +47,10 @@ router.get('/', async (req, res) => {
     }
 
     const totalStars = parseInt(user.total_stars) || 0;
+    // 返回半价抽卡次数
+    const halfDrawCount = parseInt(user.half_draw_count) || 0;
+    // 返回掷骰子次数（今日有效）
+    const diceCount = parseInt(user.today_dice_count) || 0;
 
     res.json({
       code: 0,
@@ -47,7 +58,8 @@ router.get('/', async (req, res) => {
         totalStars,
         currentStars: parseInt(user.current_stars) || 0,
         drawCount: parseInt(user.draw_count) || 0,
-        halfDrawCount: parseInt(user.half_draw_count) || 0,
+        diceCount: diceCount,
+        halfDrawCount: halfDrawCount,
         completedWishes,
         totalTasks,
         activeTasks
