@@ -80,6 +80,13 @@ class MemoryStore {
     return true;
   }
 
+  async zrangeWithScores(key, start, stop) {
+    if (!this.data.has(key)) return [];
+    const list = this.data.get(key);
+    const end = stop === -1 ? list.length : stop + 1;
+    return list.slice(start, end).map(item => ({ score: item.score, member: item.member }));
+  }
+
   async zrange(key, start, stop) {
     if (!this.data.has(key)) return [];
     const list = this.data.get(key);
@@ -118,6 +125,24 @@ class MemoryStore {
   // 清理所有数据（仅用于测试）
   clear() {
     this.data.clear();
+  }
+
+  // 同步辅助（开发环境）
+  async keys(pattern) {
+    const re = new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+    return Array.from(this.data.keys()).filter(k => re.test(k));
+  }
+
+  async type(key) {
+    if (!this.data.has(key)) return 'none';
+    const value = this.data.get(key);
+    if (value instanceof Map) return 'hash';
+    if (value instanceof Set) return 'set';
+    if (Array.isArray(value)) {
+      if (value.length > 0 && typeof value[0] === 'object' && 'member' in value[0]) return 'zset';
+      return 'list';
+    }
+    return 'string';
   }
 }
 
