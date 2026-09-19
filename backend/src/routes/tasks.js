@@ -2,13 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { ensureToday } = require('../services/dailyState');
+const { applyTaskCompletion } = require('../services/completions');
 
 const PREFIX = 'wishstar:task';
 
 // 创建任务
 router.post('/', async (req, res) => {
   try {
-    const { userId, name, starsPerComplete, maxComplete, rewardStars, rewardHalfDraw, rewardDraw } = req.body;
+    const { userId, name, starsPerComplete, maxComplete, rewardStars, rewardHalfDraw, rewardDraw, taskType, minutesPerComplete } = req.body;
 
     const taskId = uuidv4();
     const now = Date.now();
@@ -17,6 +18,8 @@ router.post('/', async (req, res) => {
       id: taskId,
       user_id: userId,
       name: name,
+      task_type: taskType === 'time' ? 'time' : 'general',
+      minutes_per_complete: taskType === 'time' ? (minutesPerComplete || 25) : '0',
       stars_per_complete: starsPerComplete !== undefined ? starsPerComplete : 5,
       max_complete: maxComplete || 0,
       current_complete: '0',
@@ -82,13 +85,15 @@ router.get('/:taskId', async (req, res) => {
 router.put('/:taskId', async (req, res) => {
   try {
     const { taskId } = req.params;
-    const { name, starsPerComplete, maxComplete, rewardStars, rewardHalfDraw, rewardDraw } = req.body;
+    const { name, starsPerComplete, maxComplete, rewardStars, rewardHalfDraw, rewardDraw, taskType, minutesPerComplete } = req.body;
 
     const updates = {
       updated_at: Date.now().toString()
     };
 
     if (name) updates.name = name;
+    if (taskType !== undefined) updates.task_type = taskType === 'time' ? 'time' : 'general';
+    if (minutesPerComplete !== undefined) updates.minutes_per_complete = minutesPerComplete;
     if (starsPerComplete !== undefined) updates.stars_per_complete = starsPerComplete;
     if (maxComplete !== undefined) updates.max_complete = maxComplete;
     if (rewardStars !== undefined) updates.reward_stars = rewardStars ? '1' : '0';
@@ -143,113 +148,20 @@ router.post('/:taskId/complete', async (req, res) => {
       return res.json({ code: 1, message: '该任务已完成' });
     }
 
-    const userId = task.user_id;
-    const now = new Date();
-    const date = now.toISOString().split('T')[0];
-    const timestamp = now.getTime();
-
-    // 计算获得的星星
-    let starsEarned = parseInt(task.stars_per_complete);
-    if (isNaN(starsEarned)) starsEarned = 5;
-    const isWeekend = now.getDay() === 0 || now.getDay() === 6;
-    if (isWeekend) {
-      starsEarned *= 2;
-    }
-
-    // 检查并重置今日星星和掷骰子计数（统一按 last_daily_date 判断跨天）
-    const today = now.toISOString().split('T')[0];
-    await ensureToday(req.redis, userId, today);
-
-    // 更新用户星星
-    await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', starsEarned);
-    await req.redis.hincrby(`wishstar:user:${userId}`, 'total_stars', starsEarned);
-    // 记录今天获得的星星（用于判断是否能掷骰子）
-    const newTodayStars = await req.redis.hincrby(`wishstar:user:${userId}`, 'today_stars', starsEarned);
-
-    // 计算今天累计可以获得的掷骰子次数（每5颗星星获得1次掷骰子机会）
-    const totalDiceCanGet = Math.floor(newTodayStars / 5);
-    // 获取已经获得的掷骰子次数
-    const earnedDiceCount = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'earned_dice_count')) || 0;
-    // 计算还可以获得的次数
-    const diceCountToAdd = totalDiceCanGet - earnedDiceCount;
-    if (diceCountToAdd > 0) {
-      // 只增加掷骰子次数，不增加半价抽卡次数
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'today_dice_count', diceCountToAdd);
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'earned_dice_count', diceCountToAdd);
-    }
-
-    // 更新任务完成次数
-    const newComplete = currentComplete + 1;
-    await req.redis.hset(`${PREFIX}:${taskId}`, 'current_complete', newComplete.toString());
-    await req.redis.hset(`${PREFIX}:${taskId}`, 'updated_at', Date.now().toString());
-
-    // 如果达到最大次数，标记为完成
-    if (maxComplete > 0 && newComplete >= maxComplete) {
-      await req.redis.hset(`${PREFIX}:${taskId}`, 'status', 'finished');
-    }
-
-    // 记录奖励
-    const rewards = [];
-    if (task.reward_stars === '1') {
-      rewards.push('星星');
-    }
-    if (task.reward_half_draw === '1') {
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', 1);
-      rewards.push('半价抽卡');
-    }
-    if (task.reward_draw === '1') {
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'draw_count', 1);
-      rewards.push('抽卡');
-    }
-
-    // 记录到每日记录
-    const record = {
-      id: uuidv4(),
-      task_id: taskId,
-      task_name: task.name,
-      stars: starsEarned,
-      type: 'task',
-      period: getPeriod(now.getHours()),
-      is_weekend_double: isWeekend,
-      rewards: rewards.join(','),
-      created_at: timestamp
-    };
-
-    await req.redis.zadd(`wishstar:records:${userId}:${date}`, timestamp, JSON.stringify(record));
-
-    // 记录流水
-    const log = {
-      id: uuidv4(),
-      type: 'income',
-      category: 'task',
-      amount: starsEarned,
-      description: `完成任务「${task.name}」获得${starsEarned}颗星星${isWeekend ? '（周末加倍）' : ''}`,
-      created_at: timestamp
-    };
-    await req.redis.zadd(`wishstar:logs:${userId}`, timestamp, JSON.stringify(log));
+    const result = await applyTaskCompletion(req.redis, task, { category: 'task' });
 
     res.json({
       code: 0,
       data: {
-        starsEarned,
-        isWeekendDouble: isWeekend,
-        starsAfterDouble: starsEarned,
-        rewards
+        starsEarned: result.starsEarned,
+        isWeekendDouble: result.isWeekendDouble,
+        starsAfterDouble: result.starsEarned,
+        rewards: result.rewards
       }
     });
   } catch (error) {
     res.status(500).json({ code: 1, message: error.message });
   }
 });
-
-// 判断时段：早上4-13点，下午13-18点，晚上18-24点
-// 注意：中国时区是 UTC+8
-function getPeriod(hour) {
-  // 转换为北京时间（UTC+8）
-  const beijingHour = (hour + 8) % 24;
-  if (beijingHour >= 4 && beijingHour < 13) return 'morning';
-  if (beijingHour >= 13 && beijingHour < 18) return 'afternoon';
-  return 'evening';
-}
 
 module.exports = router;

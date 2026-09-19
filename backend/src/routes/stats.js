@@ -57,6 +57,7 @@ router.get('/', async (req, res) => {
       data: {
         totalStars,
         currentStars: parseInt(user.current_stars) || 0,
+        todayStars: parseInt(user.today_stars) || 0,
         drawCount: parseInt(user.draw_count) || 0,
         diceCount: diceCount,
         halfDrawCount: halfDrawCount,
