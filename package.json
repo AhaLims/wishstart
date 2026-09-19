@@ -1,0 +1,43 @@
+{
+  "name": "wishstar-desktop",
+  "version": "1.0.0",
+  "description": "许愿星计划桌面端（Windows .exe）",
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "build:frontend": "cd frontend && npm install && npm run build",
+    "build:backend": "cd backend && npm install --production",
+    "dev:desktop": "npm run build:frontend && electron .",
+    "dist:win": "npm run build:frontend && npm run build:backend && electron-builder --win",
+    "dist:win:portable": "npm run build:frontend && npm run build:backend && electron-builder --win portable",
+    "migrate:export": "node scripts/export-redis.js"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.wishstar.desktop",
+    "productName": "许愿星计划",
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "files": [
+      "electron/**",
+      "backend/**",
+      "frontend/dist/**"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "许愿星计划"
+    }
+  }
+}
