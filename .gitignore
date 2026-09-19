@@ -3,3 +3,9 @@ node_modules/
 *.log
 dist/
 .env
+dist-desktop/
+frontend/dist/
+*.tmp
+
+# JSON 存储模式的本地数据文件（含 .bak / .tmp / .pre-import-* 备份）
+wishstar-data.json*
