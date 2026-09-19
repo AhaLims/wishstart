@@ -10,6 +10,8 @@
         <router-link to="/wishes">愿望</router-link>
         <router-link to="/draw">抽卡</router-link>
         <router-link to="/stats">统计</router-link>
+        <router-link v-if="isDesktop()" to="/work">工作时间</router-link>
+        <router-link to="/settings">设置</router-link>
       </div>
     </nav>
     <main class="main-content">
@@ -19,6 +21,7 @@
 </template>
 
 <script setup>
+import { isDesktop } from './utils/env'
 </script>
 
 <style scoped>

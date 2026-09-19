@@ -72,3 +72,18 @@ export const statsApi = {
 }
 
 export default api
+
+// 工作时间 API
+export const workApi = {
+  startSession: (data) => api.post('/work/sessions', data),
+  endSession: (sessionId, data) => api.post(`/work/sessions/${sessionId}/end`, data),
+  settle: (userId) => api.post('/work/settle', { userId }),
+  getToday: (userId) => api.get(`/work/today?userId=${userId}`),
+  getStatus: (userId) => api.get(`/work/status?userId=${userId}`)
+}
+
+// 同步 API
+export const syncApi = {
+  exportSnapshot: () => api.get('/sync/export'),
+  importSnapshot: (snapshot) => api.post('/sync/import', { snapshot })
+}

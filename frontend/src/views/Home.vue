@@ -4,6 +4,14 @@
 
     <!-- 资源展示 -->
     <div class="resources-grid">
+      <div v-if="isDesktop()" class="resource-card work-card">
+        <div class="resource-icon">⏱</div>
+        <div class="resource-info">
+          <div class="resource-label">今日已工作</div>
+          <div class="resource-value number work-value">{{ workTimeText }}</div>
+        </div>
+      </div>
+
       <div class="resource-card star-card">
         <div class="resource-icon">⭐</div>
         <div class="resource-info">
@@ -25,6 +33,10 @@
     <div class="quick-actions">
       <h2 class="section-title">快捷操作</h2>
       <div class="actions-grid">
+        <button v-if="isDesktop()" class="action-btn" @click="$router.push('/work')">
+          <span class="action-icon">⏱</span>
+          <span class="action-text">去工作</span>
+        </button>
         <button class="action-btn" @click="$router.push('/tasks')">
           <span class="action-icon">✓</span>
           <span class="action-text">完成任务</span>
@@ -68,7 +80,8 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useUserStore } from '../stores/user'
-import { recordApi } from '../api'
+import { recordApi, workApi } from '../api'
+import { isDesktop } from '../utils/env'
 
 const userStore = useUserStore()
 const showQuickRecord = ref(false)
@@ -76,10 +89,32 @@ const quickTaskName = ref('')
 const quickStars = ref(5)
 
 const stats = computed(() => userStore.stats)
+const workSeconds = ref(0)
+
+const workTimeText = computed(() => {
+  const minutes = Math.floor(workSeconds.value / 60)
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return h > 0 ? `${h}时${m}分` : `${minutes}分钟`
+})
+
+const fetchWorkToday = async () => {
+  try {
+    const res = await workApi.getToday(userStore.userId)
+    if (res.code === 0) {
+      workSeconds.value = res.data.totalSeconds
+    }
+  } catch (error) {
+    console.error('Fetch work today error:', error)
+  }
+}
 
 onMounted(async () => {
   await userStore.initUser()
   await userStore.fetchStats()
+  if (isDesktop()) {
+    await fetchWorkToday()
+  }
 })
 
 const submitQuickRecord = async () => {
@@ -109,7 +144,7 @@ const submitQuickRecord = async () => {
 <style scoped>
 .resources-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 1.5rem;
   margin-bottom: 2rem;
 }
@@ -134,6 +169,15 @@ const submitQuickRecord = async () => {
 
 .dice-card .resource-icon {
   text-shadow: 0 0 20px rgba(74, 144, 217, 0.5);
+}
+
+.work-card .resource-icon {
+  text-shadow: 0 0 20px rgba(255, 215, 0, 0.4);
+}
+
+.work-value {
+  font-size: 1.4rem;
+  color: #FFD700;
 }
 
 .resource-label {

@@ -12,18 +12,27 @@
       <div v-for="task in tasks" :key="task.id" class="task-card">
         <div class="task-header">
           <h3 class="task-name">{{ task.name }}</h3>
-          <span class="task-status" :class="task.status">{{ task.status === 'finished' ? '已完成' : '进行中' }}</span>
+          <div class="task-header-right">
+            <span v-if="task.task_type === 'time'" class="task-type-badge">⏱ 时间型</span>
+            <span class="task-status" :class="task.status">{{ task.status === 'finished' ? '已完成' : '进行中' }}</span>
+          </div>
         </div>
 
         <div class="task-info">
-          <div class="task-stars">
+          <div class="task-stars" v-if="task.reward_stars === '1'">
             <span class="star-icon">⭐</span>
             <span class="number">{{ task.stars_per_complete }}</span>
             <span class="unit">星/次</span>
           </div>
 
           <div class="task-progress">
-            <span v-if="task.max_complete > 0">
+            <template v-if="task.task_type === 'time'">
+              <span>每 {{ task.minutes_per_complete }} 分钟自动完成 1 次</span>
+              <span v-if="workProgress[task.id]">
+                （今日已工作 {{ workProgress[task.id].totalMinutes }} 分钟，自动完成 {{ workProgress[task.id].earned }} 次）
+              </span>
+            </template>
+            <span v-else-if="task.max_complete > 0">
               已完成 {{ task.current_complete }} / {{ task.max_complete }} 次
             </span>
             <span v-else>无限次数</span>
@@ -38,7 +47,7 @@
 
         <div class="task-actions">
           <button
-            v-if="task.status !== 'finished'"
+            v-if="task.status !== 'finished' && task.task_type !== 'time'"
             class="btn btn-success"
             @click="completeTask(task.id)"
           >
@@ -62,6 +71,25 @@
         <div class="form-group">
           <label class="label">任务名称</label>
           <input v-model="newTask.name" class="input" placeholder="输入任务名称" />
+        </div>
+
+        <div class="form-group">
+          <label class="label">任务类型</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" value="general" v-model="newTask.taskType" />
+              ✅ 通用型（手动完成）
+            </label>
+            <label class="radio-label">
+              <input type="radio" value="time" v-model="newTask.taskType" />
+              ⏱ 时间型（按工作分钟数自动完成）
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" v-if="newTask.taskType === 'time'">
+          <label class="label">工作多少分钟自动完成 1 次</label>
+          <input v-model.number="newTask.minutesPerComplete" type="number" min="1" class="input" />
         </div>
 
         <div class="form-group">
@@ -104,14 +132,18 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useUserStore } from '../stores/user'
-import { taskApi } from '../api'
+import { taskApi, workApi } from '../api'
 
 const userStore = useUserStore()
 const tasks = ref([])
 const showAddModal = ref(false)
 
+const workProgress = ref({})
+
 const newTask = ref({
   name: '',
+  taskType: 'general',
+  minutesPerComplete: 25,
   starsPerComplete: 1,
   maxComplete: 0,
   rewardType: 'stars'
@@ -128,6 +160,21 @@ const fetchTasks = async () => {
   }
 }
 
+const fetchWorkProgress = async () => {
+  try {
+    const res = await workApi.getToday(userStore.userId)
+    if (res.code === 0) {
+      const map = {}
+      res.data.timeTasks.forEach(t => {
+        map[t.taskId] = { totalMinutes: t.totalMinutes, earned: t.earned }
+      })
+      workProgress.value = map
+    }
+  } catch (error) {
+    console.error('Fetch work progress error:', error)
+  }
+}
+
 const addTask = async () => {
   if (!newTask.value.name) return
 
@@ -135,6 +182,8 @@ const addTask = async () => {
   const taskData = {
     userId: userStore.userId,
     name: newTask.value.name,
+    taskType: newTask.value.taskType,
+    minutesPerComplete: newTask.value.minutesPerComplete || 25,
     maxComplete: newTask.value.maxComplete,
     starsPerComplete: newTask.value.rewardType === 'stars' ? newTask.value.starsPerComplete : 0,
     rewardStars: newTask.value.rewardType === 'stars',
@@ -149,6 +198,8 @@ const addTask = async () => {
       showAddModal.value = false
       newTask.value = {
         name: '',
+        taskType: 'general',
+        minutesPerComplete: 25,
         starsPerComplete: 1,
         maxComplete: 0,
         rewardType: 'stars'
@@ -218,6 +269,7 @@ const deleteTask = async (taskId) => {
 
 onMounted(() => {
   fetchTasks()
+  fetchWorkProgress()
 })
 </script>
 
@@ -256,6 +308,21 @@ onMounted(() => {
   border-radius: 20px;
   font-size: 0.8rem;
   font-weight: 600;
+}
+
+.task-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.task-type-badge {
+  padding: 0.25rem 0.5rem;
+  background: rgba(255, 215, 0, 0.15);
+  border: 1px solid rgba(255, 215, 0, 0.4);
+  border-radius: 8px;
+  font-size: 0.75rem;
+  color: #FFD700;
 }
 
 .task-status.active {
