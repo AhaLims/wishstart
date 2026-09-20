@@ -14,23 +14,72 @@ const {
 
 const PREFIX = 'wishstar:wish';
 
+// 抽卡消耗的三档：免费（1 次抽卡次数）→ 半价（3⭐ + 1 次半价次数）→ 全价（5⭐）
+const STAR_COST_HALF = 3;
+const STAR_COST_FULL = 5;
+
+// 按用户当前资源自动挑一档，前端不再让用户选。
+// 返回 { mode, stars, free, half }；三档都用不了时返回 null。
+async function pickDrawMode(store, userId) {
+  const user = (await store.hgetall(`wishstar:user:${userId}`)) || {};
+  const stars = parseInt(user.current_stars) || 0;
+  const freeCount = parseInt(user.draw_count) || 0;
+  const halfCount = parseInt(user.half_draw_count) || 0;
+
+  // 有免费次数就先用免费的
+  if (freeCount >= 1) {
+    return { mode: 'free', stars: 0, free: 1, half: 0 };
+  }
+  // 其次半价：既要还有半价次数，也要够星星
+  if (halfCount >= 1 && stars >= STAR_COST_HALF) {
+    return { mode: 'half', stars: STAR_COST_HALF, free: 0, half: 1 };
+  }
+  // 最后全价
+  if (stars >= STAR_COST_FULL) {
+    return { mode: 'normal', stars: STAR_COST_FULL, free: 0, half: 0 };
+  }
+  return null;
+}
+
+// 扣资源。调用前必须确认过 pickDrawMode 不为 null，
+// 否则会出现「星星扣了、碎片没加上」或者次数白白丢掉
+async function consumeDrawCost(store, userId, cost) {
+  const userKey = `wishstar:user:${userId}`;
+  if (cost.free) await store.hincrby(userKey, 'draw_count', -cost.free);
+  if (cost.half) await store.hincrby(userKey, 'half_draw_count', -cost.half);
+  if (cost.stars) await store.hincrby(userKey, 'current_stars', -cost.stars);
+}
+
+// 流水里怎么描述这次消耗
+function drawCostText(cost) {
+  if (cost.mode === 'free') return '消耗1次抽卡次数';
+  if (cost.mode === 'half') return `消耗${STAR_COST_HALF}颗星星和1次半价抽卡次数`;
+  return `消耗${STAR_COST_FULL}颗星星`;
+}
+
 // 抽卡
 router.post('/', async (req, res) => {
   try {
-    const { userId, type, drawType } = req.body;
+    const { userId, type } = req.body;
 
     if (!userId) {
       return res.status(400).json({ code: 1, message: '缺少userId参数' });
     }
 
-    if (!type || !drawType) {
-      return res.status(400).json({ code: 1, message: '缺少type或drawType参数' });
+    if (!type) {
+      return res.status(400).json({ code: 1, message: '缺少type参数' });
     }
 
     const now = Date.now();
     const timestamp = now;
 
-    // 先刷新愿望状态，避免把碎片抽进一个已经该过期、或已经集满的愿望里
+    // 先看资源够不够用哪种方式，不够就没必要往下走（也不会产生任何副作用）
+    const cost = await pickDrawMode(req.redis, userId);
+    if (!cost) {
+      return res.json({ code: 1, message: '抽卡次数和星星都不够，先去完成任务攒一点吧' });
+    }
+
+    // 刷新愿望状态，避免把碎片抽进一个已经该过期、或已经集满的愿望里
     const wishes = await ensureWishFreshAll(req.redis, userId);
 
     // 只抽取「收集中且未集满」的愿望（通用愿望也在池中，与普通愿望等权）
@@ -44,35 +93,8 @@ router.post('/', async (req, res) => {
     const wish = candidates[Math.floor(Math.random() * candidates.length)];
     const randomWishId = wish.id;
 
-    let costStars = 0;
-
-    // 只支持消耗星星抽卡
-    const currentStars = await req.redis.hget(`wishstar:user:${userId}`, 'current_stars');
-    const stars = parseInt(currentStars) || 0;
-
-    // 根据抽卡类型决定消耗
-    // 全价抽卡：5颗星星，半价抽卡：3颗星星
-    const priceMap = {
-      normal: 5,   // 全价抽卡消耗5颗星
-      half: 3      // 半价抽卡消耗3颗星
-    };
-    costStars = priceMap[drawType] || 5;
-
-    // 半价抽卡需要消耗半价抽卡次数
-    if (drawType === 'half') {
-      const halfDrawCount = await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count');
-      const count = parseInt(halfDrawCount) || 0;
-      if (count < 1) {
-        return res.json({ code: 1, message: '半价抽卡次数不足' });
-      }
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', -1);
-    }
-
-    if (stars < costStars) {
-      return res.json({ code: 1, message: `星星不足，需要${costStars}颗星星` });
-    }
-
-    await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -costStars);
+    // 到这里才真正扣资源：前面任何一步失败都不会白扣
+    await consumeDrawCost(req.redis, userId, cost);
 
     // 增加碎片
     const newFragments = await req.redis.hincrby(`${PREFIX}:${randomWishId}`, 'current_fragments', 1);
@@ -94,8 +116,8 @@ router.post('/', async (req, res) => {
       wish_name: wish.name,
       fragment_index: newFragments,
       type: 'stars',
-      draw_type: drawType,
-      cost: costStars,
+      draw_type: cost.mode,
+      cost: cost.stars,
       created_at: timestamp
     };
 
@@ -103,18 +125,13 @@ router.post('/', async (req, res) => {
 
     // 记录流水
     const fragmentsText = formatFragments({ ...wish, current_fragments: String(newFragments) });
-    let logDescription = '';
-    if (drawType === 'half') {
-      logDescription = `消耗${costStars}颗星星和1次半价抽卡次数，获得「${wish.name}」碎片(${fragmentsText})`;
-    } else {
-      logDescription = `消耗${costStars}颗星星抽卡，获得「${wish.name}」碎片(${fragmentsText})`;
-    }
+    const logDescription = `${drawCostText(cost)}抽卡，获得「${wish.name}」碎片(${fragmentsText})`;
 
     const log = {
       id: uuidv4(),
       type: 'expenditure',
       category: 'draw',
-      amount: -(costStars || 0),
+      amount: -cost.stars,
       description: logDescription,
       created_at: timestamp
     };
@@ -158,7 +175,7 @@ router.get('/', async (req, res) => {
 // 线下抽卡记录
 router.post('/manual', async (req, res) => {
   try {
-    const { userId, wishId, drawType } = req.body;
+    const { userId, wishId } = req.body;
 
     if (!userId || !wishId) {
       return res.status(400).json({ code: 1, message: '缺少必要参数' });
@@ -183,34 +200,14 @@ router.post('/manual', async (req, res) => {
       return res.json({ code: 1, message: '愿望碎片已集满，请先合成' });
     }
 
-    const currentStars = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'current_stars')) || 0;
-    const drawCount = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'draw_count')) || 0;
-    const halfDrawCount = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count')) || 0;
-
-    // 根据消耗方式检查资源
-    if (drawType === 'free') {
-      // 免费抽卡：消耗1次抽卡次数
-      if (drawCount < 1) {
-        return res.json({ code: 1, message: '抽卡次数不足' });
-      }
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'draw_count', -1);
-    } else if (drawType === 'normal') {
-      // 全价抽卡：消耗5颗星星
-      if (currentStars < 5) {
-        return res.json({ code: 1, message: '星星不足，需要5颗星星' });
-      }
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -5);
-    } else if (drawType === 'half') {
-      // 半价抽卡：消耗3颗星星+1次半价次数
-      if (currentStars < 3) {
-        return res.json({ code: 1, message: '星星不足，需要3颗星星' });
-      }
-      if (halfDrawCount < 1) {
-        return res.json({ code: 1, message: '半价抽卡次数不足' });
-      }
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -3);
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', -1);
+    // 线下抽卡同样是按资源自动挑消耗方式，跟线上抽卡一套规则
+    const cost = await pickDrawMode(req.redis, userId);
+    if (!cost) {
+      return res.json({ code: 1, message: '抽卡次数和星星都不够，先去完成任务攒一点吧' });
     }
+
+    // 愿望已经校验过了，这里才真正扣资源
+    await consumeDrawCost(req.redis, userId, cost);
 
     const now = Date.now();
 
@@ -233,7 +230,8 @@ router.post('/manual', async (req, res) => {
       wish_name: wish.name,
       fragment_index: newFragments,
       type: 'manual',
-      draw_type: drawType,
+      draw_type: cost.mode,
+      cost: cost.stars,
       created_at: now
     };
 
@@ -241,14 +239,7 @@ router.post('/manual', async (req, res) => {
 
     // 记录流水
     const fragmentsText = formatFragments({ ...wish, current_fragments: String(newFragments) });
-    let logDescription = '';
-    if (drawType === 'free') {
-      logDescription = `线下抽卡记录：消耗1次抽卡次数，「${wish.name}」获得1个碎片(${fragmentsText})`;
-    } else if (drawType === 'normal') {
-      logDescription = `线下抽卡记录：消耗5颗星星，「${wish.name}」获得1个碎片(${fragmentsText})`;
-    } else if (drawType === 'half') {
-      logDescription = `线下抽卡记录：消耗3颗星星+1次半价次数，「${wish.name}」获得1个碎片(${fragmentsText})`;
-    }
+    const logDescription = `线下抽卡记录：${drawCostText(cost)}，「${wish.name}」获得1个碎片(${fragmentsText})`;
 
     const log = {
       id: uuidv4(),

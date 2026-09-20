@@ -39,30 +39,19 @@
 
     <!-- 抽卡区域 -->
     <div class="draw-area">
-      <!-- 抽卡价格选择 -->
-      <div class="price-info">
-        <div class="price-option">
-          <label class="price-label">
-            <input type="radio" value="free" v-model="drawType" />
-            <span>免费抽卡</span>
-            <span class="price">1次抽卡次数</span>
-          </label>
-        </div>
-        <div class="price-option">
-          <label class="price-label">
-            <input type="radio" value="normal" v-model="drawType" />
-            <span>全价抽卡</span>
-            <span class="price">5 ⭐</span>
-          </label>
-        </div>
-        <div class="price-option">
-          <label class="price-label">
-            <input type="radio" value="half" v-model="drawType" />
-            <span>半价抽卡</span>
-            <span class="price">3 ⭐ + 1次半价次数</span>
-          </label>
-        </div>
+      <!-- 消耗方式不用选，系统按资源自动挑一档，这里只提前说明会用哪一档 -->
+      <div class="draw-mode" :class="{ 'draw-mode-empty': !canDraw }">
+        <template v-if="canDraw">
+          <span class="mode-label">本次抽卡</span>
+          <span class="mode-name">{{ nextDrawMode.label }}</span>
+          <span class="mode-cost">{{ nextDrawMode.cost }}</span>
+        </template>
+        <template v-else>
+          <span class="mode-label">暂时抽不了</span>
+          <span class="mode-cost">抽卡次数和星星都不够，先去完成任务攒一点吧</span>
+        </template>
       </div>
+      <p v-if="canDraw" class="hint mode-hint">优先用免费的，没有免费次数就用半价，都没有才全价 5 ⭐</p>
 
       <button
         class="btn btn-primary draw-btn"
@@ -76,7 +65,7 @@
     <!-- 线下抽卡记录区域 -->
     <div class="draw-area manual-section">
       <h3>线下抽卡记录</h3>
-      <p class="hint">如果你在线下抽了卡，可以在这里记录（使用上方选择的消耗方式）</p>
+      <p class="hint">如果你在线下抽了卡，可以在这里记录（消耗方式同上，也是自动挑的）</p>
 
       <div class="form-group">
         <label class="label">选择愿望</label>
@@ -117,7 +106,6 @@ import { useUserStore } from '../stores/user'
 import { drawApi, wishApi } from '../api'
 
 const userStore = useUserStore()
-const drawType = ref('normal')
 const isDrawing = ref(false)
 const lastResult = ref(null)
 const wishes = ref([])
@@ -125,19 +113,27 @@ const selectedWishId = ref('')
 
 const stats = computed(() => userStore.stats)
 
-// 抽卡按钮是否可用（线上抽卡和线下记录共用）
-const canDraw = computed(() => {
-  if (drawType.value === 'free') {
-    // 免费抽卡：1次抽卡次数
-    return (stats.value?.drawCount || 0) >= 1
-  } else if (drawType.value === 'normal') {
-    // 全价抽卡：5颗星星
-    return (stats.value?.currentStars || 0) >= 5
-  } else {
-    // 半价抽卡：3颗星星 + 1次半价抽卡次数
-    return (stats.value?.currentStars || 0) >= 3 && (stats.value?.halfDrawCount || 0) >= 1
+// 消耗方式由后端按当前资源自动决定，前端这里只是提前算一遍给用户看。
+// 规则必须和后端 pickDrawMode 保持一致：免费 → 半价 → 全价
+const nextDrawMode = computed(() => {
+  const stars = stats.value?.currentStars || 0
+  const free = stats.value?.drawCount || 0
+  const half = stats.value?.halfDrawCount || 0
+
+  if (free >= 1) {
+    return { label: '免费抽卡', cost: `1次抽卡次数（还有 ${free} 次）`, affordable: true }
   }
+  if (half >= 1 && stars >= 3) {
+    return { label: '半价抽卡', cost: '3 ⭐ + 1次半价次数', affordable: true }
+  }
+  if (stars >= 5) {
+    return { label: '全价抽卡', cost: '5 ⭐', affordable: true }
+  }
+  return { label: '', cost: '', affordable: false }
 })
+
+// 抽卡按钮是否可用（线上抽卡和线下记录共用）：三档里有一档用得起就行
+const canDraw = computed(() => nextDrawMode.value.affordable)
 
 // 线下抽卡记录按钮是否可用（复用 canDraw 逻辑）
 const canSubmitManual = computed(() => {
@@ -181,8 +177,7 @@ const doDraw = async () => {
   try {
     const res = await drawApi.draw({
       userId: userStore.userId,
-      type: 'stars',
-      drawType: drawType.value
+      type: 'stars'
     })
 
     if (res.code === 0) {
@@ -207,8 +202,7 @@ const submitManualDraw = async () => {
   try {
     const res = await drawApi.submitManual({
       userId: userStore.userId,
-      wishId: selectedWishId.value,
-      drawType: drawType.value
+      wishId: selectedWishId.value
     })
 
     if (res.code === 0) {
@@ -293,32 +287,55 @@ onMounted(() => {
   border-color: #4A90D9;
 }
 
-.price-info, .count-options {
-  margin-bottom: 1.5rem;
-}
-
-.price-option, .count-option {
-  display: block;
-  padding: 0.75rem;
-  margin: 0.5rem 0;
-  background: rgba(26, 26, 46, 0.8);
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.price-label, .count-option {
+/* 消耗方式提示条：不让人选，只说明这次会用哪一档 */
+.draw-mode {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.5rem;
+  background: rgba(26, 26, 46, 0.8);
+  border: 1px solid rgba(74, 144, 217, 0.35);
+  border-radius: 10px;
 }
 
-.price-label input, .count-option input {
-  accent-color: #4A90D9;
+.draw-mode-empty {
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
-.price-label .price {
+.draw-mode .mode-label {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.85rem;
+}
+
+.draw-mode .mode-name {
+  color: #4A90D9;
+  font-weight: 700;
+}
+
+.draw-mode .mode-cost {
   margin-left: auto;
   color: #FFD700;
+  font-size: 0.9rem;
+}
+
+.draw-mode-empty .mode-label {
+  color: #FFD700;
+  font-weight: 700;
+}
+
+.draw-mode-empty .mode-cost {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.85rem;
+}
+
+/* 抽卡区整体是居中的，但这条是对上面那个框的注解，贴左边读起来才跟得住 */
+.mode-hint {
+  margin-bottom: 1.5rem;
+  text-align: left;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .count-badge {
