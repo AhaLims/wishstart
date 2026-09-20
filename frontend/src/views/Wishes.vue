@@ -54,7 +54,10 @@
           </div>
 
           <div class="wish-info">
-            <h3 class="wish-name">{{ wish.name }}</h3>
+            <h3 class="wish-name">
+              {{ wish.name }}
+              <span class="wish-price">¥{{ wishPrice(wish) }}</span>
+            </h3>
 
             <div class="wish-progress">
               <div class="progress-bar">
@@ -113,7 +116,10 @@
           </div>
 
           <div class="wish-info">
-            <h3 class="wish-name">{{ wish.name }}</h3>
+            <h3 class="wish-name">
+              {{ wish.name }}
+              <span class="wish-price">¥{{ wishPrice(wish) }}</span>
+            </h3>
 
             <div class="wish-progress">
               <div class="progress-bar">
@@ -146,7 +152,10 @@
           </div>
 
           <div class="wish-info">
-            <h3 class="wish-name">{{ wish.name }}</h3>
+            <h3 class="wish-name">
+              {{ wish.name }}
+              <span class="wish-price">¥{{ wishPrice(wish) }}</span>
+            </h3>
 
             <div class="wish-progress">
               <div class="progress-bar">
@@ -196,8 +205,12 @@
         </div>
 
         <div class="form-group">
-          <label class="label">需要碎片数量</label>
-          <input v-model.number="newWish.totalFragments" type="number" class="input" />
+          <label class="label">愿望价格（元）</label>
+          <input v-model.number="newWish.price" type="number" min="1" class="input" />
+          <p class="form-hint">
+            {{ YUAN_PER_FRAGMENT }} 元 = 1 个碎片，这个愿望需要
+            <strong>{{ previewFragments(newWish.price) }}</strong> 个碎片
+          </p>
           <p class="form-hint">集满后有 7 天时间可以合成，过期就作废了</p>
         </div>
 
@@ -235,8 +248,12 @@
         </div>
 
         <div class="form-group">
-          <label class="label">需要碎片数量</label>
-          <input v-model.number="editWish.totalFragments" type="number" class="input" />
+          <label class="label">愿望价格（元）</label>
+          <input v-model.number="editWish.price" type="number" min="1" class="input" />
+          <p class="form-hint">
+            {{ YUAN_PER_FRAGMENT }} 元 = 1 个碎片，这个愿望需要
+            <strong>{{ previewFragments(editWish.price) }}</strong> 个碎片
+          </p>
         </div>
 
         <div class="form-group">
@@ -298,17 +315,34 @@ let timer = null
 // 可爱图标选项
 const iconOptions = ['🎁', '🎀', '🎂', '🎉', '🎄', '🌸', '🌈', '⭐', '💎', '🎵', '🍰', '🍦', '🧸', '📱', '💻', '🎮']
 
+// 价格换算：多少元 = 1 个碎片（与后端 wishState.js 保持一致）
+const YUAN_PER_FRAGMENT = 5
+
+// 价格 → 碎片数，不足一个碎片的余数向上取整
+const previewFragments = (price) => {
+  const p = Number(price)
+  if (!Number.isFinite(p) || p <= 0) return 0
+  return Math.ceil(p / YUAN_PER_FRAGMENT)
+}
+
+// 愿望价格（元）。老数据没存 price，按碎片数反推
+const wishPrice = (wish) => {
+  const stored = parseInt(wish.price)
+  if (!Number.isNaN(stored)) return stored
+  return (parseInt(wish.total_fragments) || 0) * YUAN_PER_FRAGMENT
+}
+
 const newWish = ref({
   name: '',
   icon: '🎁',
-  totalFragments: 10
+  price: 50
 })
 
 const editWish = ref({
   id: '',
   name: '',
   icon: '',
-  totalFragments: 10,
+  price: 50,
   currentFragments: 0
 })
 
@@ -393,12 +427,18 @@ const fetchWishes = async () => {
 const addWish = async () => {
   if (!newWish.value.name) return
 
+  const price = Number(newWish.value.price)
+  if (!Number.isFinite(price) || price <= 0) {
+    alert('请输入有效的价格')
+    return
+  }
+
   try {
     const res = await wishApi.createWish({
       userId: userStore.userId,
       name: newWish.value.name,
       icon: newWish.value.icon,
-      totalFragments: newWish.value.totalFragments
+      price
     })
 
     if (res.code === 0) {
@@ -406,7 +446,7 @@ const addWish = async () => {
       newWish.value = {
         name: '',
         icon: '🎁',
-        totalFragments: 10
+        price: 50
       }
       await fetchWishes()
     } else {
@@ -485,7 +525,7 @@ const openEditModal = (wish) => {
     id: wish.id,
     name: wish.name,
     icon: wish.icon || '🎁',
-    totalFragments: parseInt(wish.total_fragments),
+    price: wishPrice(wish),
     currentFragments: parseInt(wish.current_fragments)
   }
   showEditModal.value = true
@@ -494,11 +534,17 @@ const openEditModal = (wish) => {
 const updateWish = async () => {
   if (!editWish.value.name) return
 
+  const price = Number(editWish.value.price)
+  if (!Number.isFinite(price) || price <= 0) {
+    alert('请输入有效的价格')
+    return
+  }
+
   try {
     const res = await wishApi.updateWish(editWish.value.id, {
       name: editWish.value.name,
       icon: editWish.value.icon,
-      totalFragments: editWish.value.totalFragments,
+      price,
       currentFragments: editWish.value.currentFragments
     })
 
@@ -602,6 +648,18 @@ onUnmounted(() => {
   font-size: 1.2rem;
   font-weight: 700;
   margin-bottom: 1rem;
+}
+
+.wish-price {
+  display: inline-block;
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+  border-radius: 999px;
+  background: rgba(46, 204, 113, 0.18);
+  color: #2ECC71;
 }
 
 .tag-general {

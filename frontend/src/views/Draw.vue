@@ -83,7 +83,7 @@
         <select v-model="selectedWishId" class="input">
           <option value="">请选择愿望</option>
           <option v-for="wish in wishes" :key="wish.id" :value="wish.id">
-            {{ wish.name }} ({{ fragmentsText(wish) }})
+            {{ wish.name }} ¥{{ wishPrice(wish) }} ({{ fragmentsText(wish) }})
           </option>
         </select>
       </div>
@@ -144,6 +144,14 @@ const canSubmitManual = computed(() => {
   if (!selectedWishId.value) return false
   return canDraw.value
 })
+
+// 愿望价格（元）。老数据没存 price，按碎片数反推；通用愿望没有价格
+const wishPrice = (w) => {
+  if (w.wish_type === 'general') return ''
+  const stored = parseInt(w.price)
+  if (!Number.isNaN(stored)) return stored
+  return (parseInt(w.total_fragments) || 0) * 5
+}
 
 // 碎片展示：通用愿望（无上限）只显示当前数量，不带分母
 const fragmentsText = (w) => {
