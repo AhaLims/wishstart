@@ -18,6 +18,9 @@ const READY_TTL_MS = Number(process.env.WISH_READY_TTL_MS) || 7 * 24 * 3600 * 10
 const WISH_TYPE_NORMAL = 'normal';
 const WISH_TYPE_GENERAL = 'general';
 
+// 价格换算：多少元 = 1 个碎片。用户填的是价格，实际攒的仍是碎片。
+const YUAN_PER_FRAGMENT = Number(process.env.WISH_YUAN_PER_FRAGMENT) || 5;
+
 // 通用型愿望的固定属性
 const GENERAL_WISH_NAME = '通用愿望';
 const GENERAL_WISH_ICON = '🌟';
@@ -35,6 +38,30 @@ function getTotalFragments(wish) {
   if (isGeneralWish(wish)) return 0;
   const total = parseInt(wish && wish.total_fragments, 10);
   return Number.isNaN(total) ? 10 : total;
+}
+
+// 价格 → 碎片数：不足一个碎片的余数向上取整，
+// 这样攒满时实际价值不会低于标价（12 元 = 3 个碎片 = 15 元，而不是只换到 10 元的东西）。
+function priceToFragments(price) {
+  const p = Number(price);
+  if (!Number.isFinite(p) || p <= 0) return 0;
+  return Math.ceil(p / YUAN_PER_FRAGMENT);
+}
+
+// 碎片数 → 价格（向上取整后的碎片所对应的价值）
+function fragmentsToPrice(fragments) {
+  const n = parseInt(fragments, 10);
+  if (Number.isNaN(n)) return 0;
+  return n * YUAN_PER_FRAGMENT;
+}
+
+// 愿望价格（元）。通用愿望没有价格，返回 null。
+// 本次改动之前建的愿望没有存 price，按碎片数反推，保证老数据也能显示价格。
+function getWishPrice(wish) {
+  if (!wish || isGeneralWish(wish)) return null;
+  const stored = parseInt(wish.price, 10);
+  if (!Number.isNaN(stored)) return stored;
+  return fragmentsToPrice(getTotalFragments(wish));
 }
 
 function getCurrentFragments(wish) {
@@ -206,12 +233,16 @@ async function ensureGeneralWish(store, userId, knownWishes) {
 
 module.exports = {
   READY_TTL_MS,
+  YUAN_PER_FRAGMENT,
   WISH_TYPE_NORMAL,
   WISH_TYPE_GENERAL,
   GENERAL_WISH_NAME,
   GENERAL_WISH_ICON,
   isGeneralWish,
   getTotalFragments,
+  priceToFragments,
+  fragmentsToPrice,
+  getWishPrice,
   getCurrentFragments,
   isWishFull,
   isDrawEligible,

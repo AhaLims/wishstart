@@ -8,6 +8,9 @@ const {
   getCurrentFragments,
   isWishFull,
   markWishReady,
+  priceToFragments,
+  fragmentsToPrice,
+  getWishPrice,
   ensureWishFresh,
   ensureWishFreshAll,
   ensureGeneralWish
@@ -18,10 +21,28 @@ const PREFIX = 'wishstar:wish';
 // 创建愿望
 router.post('/', async (req, res) => {
   try {
-    const { userId, name, icon, totalFragments } = req.body;
+    const { userId, name, icon, price, totalFragments } = req.body;
 
     if (!userId || !name) {
       return res.status(400).json({ code: 1, message: '缺少必要参数' });
+    }
+
+    // 用户填的是价格（元），碎片数由它换算出来。
+    // 保留 totalFragments 入参是为了兼容老客户端（只传碎片数时反推价格）。
+    let totalFragmentsNum;
+    let priceNum;
+    const hasPrice = price !== undefined && price !== null && price !== '';
+
+    if (hasPrice) {
+      priceNum = Number(price);
+      if (!Number.isFinite(priceNum) || priceNum <= 0) {
+        return res.status(400).json({ code: 1, message: '请输入有效的价格' });
+      }
+      totalFragmentsNum = priceToFragments(priceNum);
+    } else {
+      const parsedTotal = parseInt(totalFragments, 10);
+      totalFragmentsNum = (Number.isNaN(parsedTotal) || parsedTotal <= 0) ? 10 : parsedTotal;
+      priceNum = fragmentsToPrice(totalFragmentsNum);
     }
 
     const wishId = uuidv4();
@@ -33,7 +54,8 @@ router.post('/', async (req, res) => {
       name: name,
       icon: icon || '🎁',
       wish_type: WISH_TYPE_NORMAL,
-      total_fragments: totalFragments ? totalFragments.toString() : '10',
+      price: priceNum.toString(),
+      total_fragments: totalFragmentsNum.toString(),
       current_fragments: '0',
       status: 'collecting',
       created_at: now.toString(),
@@ -91,7 +113,7 @@ router.get('/:wishId', async (req, res) => {
 router.put('/:wishId', async (req, res) => {
   try {
     const { wishId } = req.params;
-    const { name, icon, totalFragments, currentFragments } = req.body;
+    const { name, icon, price, totalFragments, currentFragments } = req.body;
 
     const existing = await req.redis.hgetall(`${PREFIX}:${wishId}`);
     if (!existing || !existing.id) {
@@ -101,12 +123,28 @@ router.put('/:wishId', async (req, res) => {
     const wish = await ensureWishFresh(req.redis, existing, Date.now());
     const updates = {};
 
-    // 通用型愿望的碎片上限不可改（它本来就没有上限）
-    if (totalFragments !== undefined) {
+    // 价格是源头，碎片数由它换算；两者一起写，保证不会对不上
+    if (price !== undefined && price !== null && price !== '') {
+      if (isGeneralWish(wish)) {
+        return res.json({ code: 1, message: '通用愿望没有价格，无需设置' });
+      }
+      const parsedPrice = Number(price);
+      if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+        return res.json({ code: 1, message: '请输入有效的价格' });
+      }
+      updates.price = parsedPrice.toString();
+      updates.total_fragments = priceToFragments(parsedPrice).toString();
+    } else if (totalFragments !== undefined) {
+      // 兼容只传碎片数的老客户端
       if (isGeneralWish(wish)) {
         return res.json({ code: 1, message: '通用愿望没有碎片上限，无需设置' });
       }
-      updates.total_fragments = totalFragments.toString();
+      const parsedTotal = parseInt(totalFragments, 10);
+      if (Number.isNaN(parsedTotal) || parsedTotal <= 0) {
+        return res.json({ code: 1, message: '请输入有效的碎片数量' });
+      }
+      updates.total_fragments = parsedTotal.toString();
+      updates.price = fragmentsToPrice(parsedTotal).toString();
     }
 
     // 已结束（已完成 / 已过期）的愿望只允许改名称和图标，避免把状态改回去
@@ -124,9 +162,21 @@ router.put('/:wishId', async (req, res) => {
 
     await req.redis.hset(`${PREFIX}:${wishId}`, updates);
 
-    // 手动把碎片数改到上限时，要顺带进入「已集满待合成」，
-    // 否则它会一直停在收集中：抽卡不会再选中已满的愿望，也就永远转不成 ready。
     let latest = await req.redis.hgetall(`${PREFIX}:${wishId}`);
+
+    // 调高价格后已经攒的碎片不够数了，退回收集中，并清掉作废的有效期
+    if (latest.status === 'ready' && !isWishFull(latest)) {
+      await req.redis.hset(`${PREFIX}:${wishId}`, {
+        status: 'collecting',
+        ready_at: '',
+        expires_at: '',
+        updated_at: Date.now().toString()
+      });
+      latest = await req.redis.hgetall(`${PREFIX}:${wishId}`);
+    }
+
+    // 反向：碎片数已经够（手动改碎片数、或调低价格）就直接进入「已集满待合成」，
+    // 否则它会一直停在收集中——抽卡不会再选中已满的愿望，也就永远转不成 ready。
     if (latest.status === 'collecting' && !isGeneralWish(latest) && isWishFull(latest)) {
       latest = await markWishReady(req.redis, latest, Date.now());
     }
@@ -206,7 +256,7 @@ router.post('/:wishId/complete', async (req, res) => {
       type: 'income',
       category: 'wish_complete',
       amount: 0,
-      description: `愿望「${wish.name}」已合成完成！`,
+      description: `愿望「${wish.name}」（¥${getWishPrice(wish)}）已合成完成！`,
       created_at: now
     };
     await req.redis.zadd(`wishstar:logs:${wish.user_id}`, now, JSON.stringify(log));
