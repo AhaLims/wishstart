@@ -32,6 +32,7 @@
           <div class="fragment-count">
             <span class="fragment-number">{{ generalCurrent }}</span>
             <span class="fragment-unit">个碎片</span>
+            <span class="fragment-worth">≈ ¥{{ fragmentsToPrice(generalCurrent) }}</span>
           </div>
 
           <div class="wish-status general">
@@ -422,6 +423,12 @@ const wishPrice = (wish) => {
   const stored = parseInt(wish.price)
   if (!Number.isNaN(stored)) return stored
   return (parseInt(wish.total_fragments) || 0) * YUAN_PER_FRAGMENT
+}
+
+// 碎片数 → 等值金额（元），用来说明攒着的碎片一共值多少钱
+const fragmentsToPrice = (fragments) => {
+  const n = parseInt(fragments, 10)
+  return Number.isNaN(n) ? 0 : n * YUAN_PER_FRAGMENT
 }
 
 // 配图上传前压缩到最大边 800px，否则手机照片一张就是好几 MB
@@ -893,6 +900,18 @@ onUnmounted(() => {
 .fragment-unit {
   font-size: 0.95rem;
   color: #B0B0B0;
+}
+
+/* 这些碎片一共值多少钱 */
+.fragment-worth {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #2ECC71;
+  background: rgba(46, 204, 113, 0.12);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  margin-left: 0.3rem;
+  align-self: center;
 }
 
 .wish-progress {
