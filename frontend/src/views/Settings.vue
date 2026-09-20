@@ -8,6 +8,10 @@
         桌面端与网页端通过统一的 JSON 快照互通。导出后可在另一端「导入快照」恢复。
         导入为覆盖式，导入前会自动备份当前数据。
       </p>
+      <p class="card-desc card-note">
+        愿望配图会以 base64 内嵌在快照里一起搬过去，所以配图多的快照文件会比较大，
+        导入时也需要多等一会儿。
+      </p>
       <div class="actions">
         <button class="btn btn-primary" @click="exportSnapshot">导出快照</button>
         <label class="btn btn-import">
@@ -56,7 +60,8 @@ async function exportSnapshot() {
       alert(res.message || '导出失败')
       return
     }
-    const json = JSON.stringify(res.data, null, 2)
+    // 内嵌配图后快照可能有好几 MB，缩进会白白撑大文件，这里紧凑输出
+    const json = JSON.stringify(res.data)
     const fileName = `wishstar-snapshot-${new Date().toISOString().slice(0, 10)}.json`
 
     if (desktopApi && desktopApi.saveFile) {
@@ -93,7 +98,10 @@ async function onImportFile(event) {
 
     const res = await syncApi.importSnapshot(snapshot)
     if (res.code === 0) {
-      importResult.value = `已导入 ${res.data.imported} 个数据键`
+      const imageText = res.data.importedImages
+        ? `，${res.data.importedImages} 张配图`
+        : ''
+      importResult.value = `已导入 ${res.data.imported} 个数据键${imageText}`
     } else {
       importError.value = res.message || '导入失败'
     }

@@ -12,7 +12,14 @@
       <h2 class="section-title">通用愿望</h2>
       <div class="wish-card general">
         <div class="wish-image">
-          <div class="wish-placeholder">{{ generalWish.icon || '🌟' }}</div>
+          <img
+            v-if="showImage(generalWish)"
+            :src="generalWish.image"
+            class="wish-photo"
+            :alt="generalWish.name"
+            @error="markImageBroken(generalWish)"
+          />
+          <div v-else class="wish-placeholder">{{ generalWish.icon || '🌟' }}</div>
         </div>
 
         <div class="wish-info">
@@ -50,7 +57,14 @@
       <div class="wishes-grid">
         <div v-for="wish in activeWishes" :key="wish.id" class="wish-card">
           <div class="wish-image">
-            <div class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
+            <img
+              v-if="showImage(wish)"
+              :src="wish.image"
+              class="wish-photo"
+              :alt="wish.name"
+              @error="markImageBroken(wish)"
+            />
+            <div v-else class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
           </div>
 
           <div class="wish-info">
@@ -112,7 +126,14 @@
       <div class="wishes-grid">
         <div v-for="wish in expiredWishes" :key="wish.id" class="wish-card expired">
           <div class="wish-image">
-            <div class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
+            <img
+              v-if="showImage(wish)"
+              :src="wish.image"
+              class="wish-photo"
+              :alt="wish.name"
+              @error="markImageBroken(wish)"
+            />
+            <div v-else class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
           </div>
 
           <div class="wish-info">
@@ -148,7 +169,14 @@
       <div class="wishes-grid completed-grid">
         <div v-for="wish in completedWishes" :key="wish.id" class="wish-card completed">
           <div class="wish-image">
-            <div class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
+            <img
+              v-if="showImage(wish)"
+              :src="wish.image"
+              class="wish-photo"
+              :alt="wish.name"
+              @error="markImageBroken(wish)"
+            />
+            <div v-else class="wish-placeholder">{{ wish.icon || '🎁' }}</div>
           </div>
 
           <div class="wish-info">
@@ -188,10 +216,27 @@
           <input v-model="newWish.name" class="input" placeholder="输入愿望名称" />
         </div>
 
-        <!-- 图标选择 -->
+        <!-- 图标 / 图片 二选一 -->
         <div class="form-group">
-          <label class="label">选择图标</label>
-          <div class="icon-selector">
+          <label class="label">愿望代表</label>
+          <div class="mode-switch">
+            <button
+              class="mode-btn"
+              :class="{ active: newWish.imageMode === 'icon' }"
+              @click="newWish.imageMode = 'icon'"
+            >
+              用图标
+            </button>
+            <button
+              class="mode-btn"
+              :class="{ active: newWish.imageMode === 'image' }"
+              @click="newWish.imageMode = 'image'"
+            >
+              用图片
+            </button>
+          </div>
+
+          <div v-if="newWish.imageMode === 'icon'" class="icon-selector">
             <div
               v-for="icon in iconOptions"
               :key="icon"
@@ -201,6 +246,21 @@
             >
               {{ icon }}
             </div>
+          </div>
+
+          <div v-else class="image-picker">
+            <div class="image-preview" :class="{ empty: !newWish.imageData }">
+              <img v-if="newWish.imageData" :src="newWish.imageData" alt="配图预览" />
+              <span v-else>还没有选择图片</span>
+            </div>
+            <div class="image-actions">
+              <label class="btn btn-import">
+                {{ newWish.imageData ? '换一张' : '选择图片' }}
+                <input type="file" accept="image/*" class="hidden-input" @change="onPickImage($event, 'new')" />
+              </label>
+              <button v-if="newWish.imageData" class="btn" @click="newWish.imageData = ''">移除</button>
+            </div>
+            <p class="form-hint">上传前会自动缩到最大边 800px，一张图通常几十 KB</p>
           </div>
         </div>
 
@@ -231,10 +291,27 @@
           <input v-model="editWish.name" class="input" placeholder="输入愿望名称" />
         </div>
 
-        <!-- 图标选择 -->
+        <!-- 图标 / 图片 二选一 -->
         <div class="form-group">
-          <label class="label">选择图标</label>
-          <div class="icon-selector">
+          <label class="label">愿望代表</label>
+          <div class="mode-switch">
+            <button
+              class="mode-btn"
+              :class="{ active: editWish.imageMode === 'icon' }"
+              @click="editWish.imageMode = 'icon'"
+            >
+              用图标
+            </button>
+            <button
+              class="mode-btn"
+              :class="{ active: editWish.imageMode === 'image' }"
+              @click="editWish.imageMode = 'image'"
+            >
+              用图片
+            </button>
+          </div>
+
+          <div v-if="editWish.imageMode === 'icon'" class="icon-selector">
             <div
               v-for="icon in iconOptions"
               :key="icon"
@@ -244,6 +321,21 @@
             >
               {{ icon }}
             </div>
+          </div>
+
+          <div v-else class="image-picker">
+            <div class="image-preview" :class="{ empty: !editImagePreview }">
+              <img v-if="editImagePreview" :src="editImagePreview" alt="配图预览" />
+              <span v-else>还没有选择图片</span>
+            </div>
+            <div class="image-actions">
+              <label class="btn btn-import">
+                {{ editImagePreview ? '换一张' : '选择图片' }}
+                <input type="file" accept="image/*" class="hidden-input" @change="onPickImage($event, 'edit')" />
+              </label>
+              <button v-if="editImagePreview" class="btn" @click="clearEditImage">移除</button>
+            </div>
+            <p class="form-hint">上传前会自动缩到最大边 800px，一张图通常几十 KB</p>
           </div>
         </div>
 
@@ -332,10 +424,17 @@ const wishPrice = (wish) => {
   return (parseInt(wish.total_fragments) || 0) * YUAN_PER_FRAGMENT
 }
 
+// 配图上传前压缩到最大边 800px，否则手机照片一张就是好几 MB
+const MAX_IMAGE_EDGE = 800
+const JPEG_QUALITY = 0.85
+const MAX_SOURCE_BYTES = 10 * 1024 * 1024
+
 const newWish = ref({
   name: '',
   icon: '🎁',
-  price: 50
+  price: 50,
+  imageMode: 'icon',   // 'icon' | 'image'
+  imageData: ''        // 新选的图片（dataURL），提交时才上传
 })
 
 const editWish = ref({
@@ -343,8 +442,80 @@ const editWish = ref({
   name: '',
   icon: '',
   price: 50,
-  currentFragments: 0
+  currentFragments: 0,
+  imageMode: 'icon',
+  imageData: '',       // 新选的图片（dataURL），空表示沿用原图
+  imageUrl: ''         // 愿望当前的配图地址
 })
+
+// 已加载失败的配图，避免快照导入后图片缺失时一片空白（自动回退成图标）
+const brokenImages = ref(new Set())
+
+const showImage = (wish) => !!wish?.image && !brokenImages.value.has(wish.id)
+const markImageBroken = (wish) => { brokenImages.value.add(wish.id) }
+
+// 编辑弹窗里优先显示新选的图，否则显示原来的
+const editImagePreview = computed(() => editWish.value.imageData || editWish.value.imageUrl)
+
+const clearEditImage = () => {
+  editWish.value.imageData = ''
+  editWish.value.imageUrl = ''
+}
+
+// 把图片读进来、缩到最大边 800px、按 JPEG 重新导出
+const compressImage = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onerror = () => reject(new Error('读取图片失败'))
+  reader.onload = () => {
+    const img = new Image()
+    img.onerror = () => reject(new Error('这个文件不是有效的图片'))
+    img.onload = () => {
+      const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(img.width, img.height))
+      const width = Math.max(1, Math.round(img.width * scale))
+      const height = Math.max(1, Math.round(img.height * scale))
+
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+
+      const ctx = canvas.getContext('2d')
+      // JPEG 不支持透明通道，先铺白底，否则 PNG 的透明区域会变成黑块
+      ctx.fillStyle = '#FFFFFF'
+      ctx.fillRect(0, 0, width, height)
+      ctx.drawImage(img, 0, 0, width, height)
+
+      resolve(canvas.toDataURL('image/jpeg', JPEG_QUALITY))
+    }
+    img.src = reader.result
+  }
+  reader.readAsDataURL(file)
+})
+
+const onPickImage = async (event, target) => {
+  const file = event.target.files && event.target.files[0]
+  event.target.value = ''
+  if (!file) return
+
+  if (!file.type.startsWith('image/')) {
+    alert('请选择图片文件')
+    return
+  }
+  if (file.size > MAX_SOURCE_BYTES) {
+    alert(`原图超过 ${Math.round(MAX_SOURCE_BYTES / 1024 / 1024)}MB，请换一张小一点的`)
+    return
+  }
+
+  try {
+    const dataUrl = await compressImage(file)
+    if (target === 'new') {
+      newWish.value.imageData = dataUrl
+    } else {
+      editWish.value.imageData = dataUrl
+    }
+  } catch (error) {
+    alert(error.message || '图片处理失败')
+  }
+}
 
 // 通用型愿望由系统自动创建，历史数据没有 wish_type 字段的按普通愿望处理
 const isGeneralWish = (wish) => wish.wish_type === 'general'
@@ -434,19 +605,29 @@ const addWish = async () => {
   }
 
   try {
-    const res = await wishApi.createWish({
+    const payload = {
       userId: userStore.userId,
       name: newWish.value.name,
-      icon: newWish.value.icon,
       price
-    })
+    }
+
+    // 图标和图片二选一
+    if (newWish.value.imageMode === 'image' && newWish.value.imageData) {
+      payload.image = newWish.value.imageData
+    } else {
+      payload.icon = newWish.value.icon
+    }
+
+    const res = await wishApi.createWish(payload)
 
     if (res.code === 0) {
       showAddModal.value = false
       newWish.value = {
         name: '',
         icon: '🎁',
-        price: 50
+        price: 50,
+        imageMode: 'icon',
+        imageData: ''
       }
       await fetchWishes()
     } else {
@@ -526,7 +707,10 @@ const openEditModal = (wish) => {
     name: wish.name,
     icon: wish.icon || '🎁',
     price: wishPrice(wish),
-    currentFragments: parseInt(wish.current_fragments)
+    currentFragments: parseInt(wish.current_fragments),
+    imageMode: wish.image ? 'image' : 'icon',
+    imageData: '',
+    imageUrl: wish.image || ''
   }
   showEditModal.value = true
 }
@@ -540,13 +724,23 @@ const updateWish = async () => {
     return
   }
 
+  const payload = {
+    name: editWish.value.name,
+    price,
+    currentFragments: editWish.value.currentFragments
+  }
+
+  if (editWish.value.imageMode === 'icon') {
+    payload.icon = editWish.value.icon
+    // 从图片切回图标时要显式清空配图，否则图片会一直留着
+    payload.image = ''
+  } else if (editWish.value.imageData) {
+    payload.image = editWish.value.imageData
+  }
+  // 图片模式下没重新选图 → 两个字段都不传，保持原样
+
   try {
-    const res = await wishApi.updateWish(editWish.value.id, {
-      name: editWish.value.name,
-      icon: editWish.value.icon,
-      price,
-      currentFragments: editWish.value.currentFragments
-    })
+    const res = await wishApi.updateWish(editWish.value.id, payload)
 
     if (res.code === 0) {
       showEditModal.value = false
@@ -831,5 +1025,85 @@ onUnmounted(() => {
 .icon-option.selected {
   border-color: #4A90D9;
   background: rgba(74, 144, 217, 0.3);
+}
+
+/* 卡片上的配图 */
+.wish-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 图标 / 图片 二选一切换 */
+.mode-switch {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.mode-btn {
+  flex: 1;
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background: rgba(26, 26, 46, 0.8);
+  color: #B0B0B0;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.mode-btn.active {
+  border-color: #4A90D9;
+  background: rgba(74, 144, 217, 0.3);
+  color: #FFF;
+}
+
+/* 图片选择器 */
+.image-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.image-preview {
+  height: 150px;
+  border-radius: 12px;
+  background: rgba(26, 26, 46, 0.8);
+  border: 2px dashed rgba(74, 144, 217, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.image-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.image-actions .btn {
+  flex: 1;
+  padding: 0.5rem;
+  text-align: center;
+}
+
+/* 用 label 包住 file input，样式上仍然是个按钮 */
+.btn-import {
+  cursor: pointer;
+  display: inline-block;
+}
+
+.hidden-input {
+  display: none;
 }
 </style>
