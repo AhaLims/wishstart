@@ -9,3 +9,6 @@ frontend/dist/
 
 # JSON 存储模式的本地数据文件（含 .bak / .tmp / .pre-import-* 备份）
 wishstar-data.json*
+
+# 开机自启脚本（含本机绝对路径，不可移植）
+scripts/autostart.vbs
