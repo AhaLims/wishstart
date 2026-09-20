@@ -12,3 +12,6 @@ wishstar-data.json*
 
 # 开机自启脚本（含本机绝对路径，不可移植）
 scripts/autostart.vbs
+
+# 愿望配图（用户上传的本地文件）
+backend/uploads/

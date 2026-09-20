@@ -57,7 +57,7 @@ async function main() {
 
   const serveStatic = process.env.SERVE_STATIC === '1';
   const staticDir = process.env.STATIC_DIR;
-  const app = createApp({ store, serveStatic, staticDir });
+  const app = createApp({ store, serveStatic, staticDir, uploadsDir: process.env.UPLOADS_DIR });
 
   // 内存/JSON 存储退出前落盘
   const shutdown = () => {

@@ -15,13 +15,17 @@ const {
   ensureWishFreshAll,
   ensureGeneralWish
 } = require('../services/wishState');
+const {
+  saveWishImage,
+  deleteWishImageIfUnreferenced
+} = require('../services/wishImage');
 
 const PREFIX = 'wishstar:wish';
 
 // 创建愿望
 router.post('/', async (req, res) => {
   try {
-    const { userId, name, icon, price, totalFragments } = req.body;
+    const { userId, name, icon, price, totalFragments, image } = req.body;
 
     if (!userId || !name) {
       return res.status(400).json({ code: 1, message: '缺少必要参数' });
@@ -45,6 +49,18 @@ router.post('/', async (req, res) => {
       priceNum = fragmentsToPrice(totalFragmentsNum);
     }
 
+    // 配图与图标二选一：传了图片就不存图标
+    let imageUrl = '';
+    let iconValue = icon || '🎁';
+    if (image) {
+      try {
+        imageUrl = saveWishImage(image).url;
+      } catch (err) {
+        return res.status(400).json({ code: 1, message: err.message });
+      }
+      iconValue = '';
+    }
+
     const wishId = uuidv4();
     const now = Date.now();
 
@@ -52,7 +68,8 @@ router.post('/', async (req, res) => {
       id: wishId,
       user_id: userId,
       name: name,
-      icon: icon || '🎁',
+      icon: iconValue,
+      image: imageUrl,
       wish_type: WISH_TYPE_NORMAL,
       price: priceNum.toString(),
       total_fragments: totalFragmentsNum.toString(),
@@ -113,7 +130,7 @@ router.get('/:wishId', async (req, res) => {
 router.put('/:wishId', async (req, res) => {
   try {
     const { wishId } = req.params;
-    const { name, icon, price, totalFragments, currentFragments } = req.body;
+    const { name, icon, price, totalFragments, currentFragments, image } = req.body;
 
     const existing = await req.redis.hgetall(`${PREFIX}:${wishId}`);
     if (!existing || !existing.id) {
@@ -157,10 +174,50 @@ router.put('/:wishId', async (req, res) => {
     }
 
     if (name) updates.name = name;
-    if (icon !== undefined) updates.icon = icon;
+
+    // 配图与图标二选一：显式设置谁就以谁为准，另一个清空
+    const previousImage = wish.image || '';
+    let nextImage = previousImage;
+    let nextIcon = wish.icon || '';
+
+    if (image !== undefined) {
+      if (image === '') {
+        // 显式清空配图，回退到图标
+        nextImage = '';
+      } else {
+        try {
+          nextImage = saveWishImage(image).url;
+        } catch (err) {
+          return res.status(400).json({ code: 1, message: err.message });
+        }
+        nextIcon = '';
+      }
+    }
+
+    if (icon !== undefined && icon !== '') {
+      nextIcon = icon;
+      nextImage = '';
+    }
+
+    if (image !== undefined || icon !== undefined) {
+      if (nextImage) {
+        updates.icon = '';
+        updates.image = nextImage;
+      } else {
+        updates.icon = nextIcon || '🎁';
+        updates.image = '';
+      }
+    }
+
     updates.updated_at = Date.now().toString();
 
     await req.redis.hset(`${PREFIX}:${wishId}`, updates);
+
+    // 换图或改回图标后，旧图片文件没人引用了才删（文件名是内容哈希，可能被别的愿望共用）。
+    // 必须放在 hset 之后，否则引用检查会把这个愿望自己也数进去。
+    if (previousImage && previousImage !== nextImage) {
+      await deleteWishImageIfUnreferenced(req.redis, previousImage);
+    }
 
     let latest = await req.redis.hgetall(`${PREFIX}:${wishId}`);
 
@@ -204,6 +261,11 @@ router.delete('/:wishId', async (req, res) => {
 
     await req.redis.srem(`wishstar:wishes:index:${wish.user_id}`, wishId);
     await req.redis.del(`${PREFIX}:${wishId}`);
+
+    // 数据删掉之后再清理图片文件，理由同上
+    if (wish.image) {
+      await deleteWishImageIfUnreferenced(req.redis, wish.image);
+    }
 
     res.json({ code: 0, message: '删除成功' });
   } catch (error) {
