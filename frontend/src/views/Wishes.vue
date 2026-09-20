@@ -824,7 +824,11 @@ onUnmounted(() => {
 
 .wish-image {
   width: 100%;
-  height: 150px;
+  /* 竖构图，跟竖拍手机照片一样是 3:4。用 aspect-ratio 而不是固定高度，
+     卡片宽度随网格变化时比例不会跟着跑偏 */
+  aspect-ratio: 3 / 4;
+  /* 让里面的占位图标能按这个框的大小来缩放（见 .wish-placeholder） */
+  container-type: size;
   border-radius: 12px;
   overflow: hidden;
   margin-bottom: 1rem;
@@ -835,7 +839,10 @@ onUnmounted(() => {
 }
 
 .wish-placeholder {
-  font-size: 4rem;
+  /* 换成竖构图后框变高了，固定字号在大卡片里会显得小，所以按框宽缩放。
+     第一行是不支持容器单位时的兜底 */
+  font-size: 4.5rem;
+  font-size: clamp(2.5rem, 38cqw, 7rem);
 }
 
 .wish-name {
