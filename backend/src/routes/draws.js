@@ -1,6 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
+const {
+  isGeneralWish,
+  getTotalFragments,
+  isWishFull,
+  isDrawEligible,
+  formatFragments,
+  markWishReady,
+  ensureWishFresh,
+  ensureWishFreshAll
+} = require('../services/wishState');
+
+const PREFIX = 'wishstar:wish';
 
 // 抽卡
 router.post('/', async (req, res) => {
@@ -18,34 +30,19 @@ router.post('/', async (req, res) => {
     const now = Date.now();
     const timestamp = now;
 
-    // 获取用户愿望列表（只抽取收集中(未满)的愿望）
-    const wishIds = await req.redis.smembers(`wishstar:wishes:index:${userId}`);
+    // 先刷新愿望状态，避免把碎片抽进一个已经该过期、或已经集满的愿望里
+    const wishes = await ensureWishFreshAll(req.redis, userId);
 
-    // 只抽取「收集中且未集满」的愿望（不包括 ready 和 completed）
-    const collectingWishIds = [];
-    for (const wishId of wishIds) {
-      const wish = await req.redis.hgetall(`wishstar:wish:${wishId}`);
-      if (
-        wish &&
-        wish.id &&
-        wish.status === 'collecting' &&
-        (parseInt(wish.current_fragments) || 0) < (parseInt(wish.total_fragments) || 10)
-      ) {
-        collectingWishIds.push(wishId);
-      }
-    }
+    // 只抽取「收集中且未集满」的愿望（通用愿望也在池中，与普通愿望等权）
+    const candidates = wishes.filter(isDrawEligible);
 
-    if (collectingWishIds.length === 0) {
+    if (candidates.length === 0) {
       return res.json({ code: 1, message: '没有进行中的愿望' });
     }
 
     // 随机选择一个愿望
-    const randomWishId = collectingWishIds[Math.floor(Math.random() * collectingWishIds.length)];
-    const wish = await req.redis.hgetall(`wishstar:wish:${randomWishId}`);
-
-    if (!wish || !wish.id) {
-      return res.json({ code: 1, message: '愿望不存在' });
-    }
+    const wish = candidates[Math.floor(Math.random() * candidates.length)];
+    const randomWishId = wish.id;
 
     let costStars = 0;
 
@@ -78,18 +75,16 @@ router.post('/', async (req, res) => {
     await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', -costStars);
 
     // 增加碎片
-    const newFragments = await req.redis.hincrby(`wishstar:wish:${randomWishId}`, 'current_fragments', 1);
-    await req.redis.hset(`wishstar:wish:${randomWishId}`, 'updated_at', now.toString());
+    const newFragments = await req.redis.hincrby(`${PREFIX}:${randomWishId}`, 'current_fragments', 1);
+    await req.redis.hset(`${PREFIX}:${randomWishId}`, 'updated_at', now.toString());
 
-    const totalFragments = parseInt(wish.total_fragments) || 10;
-    const isFull = newFragments >= totalFragments;
+    const totalFragments = getTotalFragments(wish);
+    // 通用愿望没有上限，永远不会集满
+    const isFull = !isGeneralWish(wish) && newFragments >= totalFragments;
 
     // 如果集满，进入「已集满待合成」状态（ready），等待用户手动合成
     if (isFull) {
-      await req.redis.hset(`wishstar:wish:${randomWishId}`, {
-        status: 'ready',
-        updated_at: now.toString()
-      });
+      await markWishReady(req.redis, { ...wish, current_fragments: String(newFragments) }, now);
     }
 
     // 记录抽卡
@@ -107,11 +102,12 @@ router.post('/', async (req, res) => {
     await req.redis.lpush(`wishstar:draws:${userId}`, JSON.stringify(drawRecord));
 
     // 记录流水
+    const fragmentsText = formatFragments({ ...wish, current_fragments: String(newFragments) });
     let logDescription = '';
     if (drawType === 'half') {
-      logDescription = `消耗${costStars}颗星星和1次半价抽卡次数，获得「${wish.name}」碎片(${newFragments}/${totalFragments})`;
+      logDescription = `消耗${costStars}颗星星和1次半价抽卡次数，获得「${wish.name}」碎片(${fragmentsText})`;
     } else {
-      logDescription = `消耗${costStars}颗星星抽卡，获得「${wish.name}」碎片(${newFragments}/${totalFragments})`;
+      logDescription = `消耗${costStars}颗星星抽卡，获得「${wish.name}」碎片(${fragmentsText})`;
     }
 
     const log = {
@@ -168,6 +164,25 @@ router.post('/manual', async (req, res) => {
       return res.status(400).json({ code: 1, message: '缺少必要参数' });
     }
 
+    // 先校验愿望是否还能抽，通过了再扣资源，
+    // 否则会出现「星星扣了、碎片没加上」的情况
+    const existing = await req.redis.hgetall(`${PREFIX}:${wishId}`);
+    if (!existing || !existing.id) {
+      return res.json({ code: 1, message: '愿望不存在' });
+    }
+
+    const wish = await ensureWishFresh(req.redis, existing, Date.now());
+
+    if (wish.status === 'expired') {
+      return res.json({ code: 1, message: '愿望已过期，无法再获得碎片' });
+    }
+    if (wish.status === 'completed') {
+      return res.json({ code: 1, message: '愿望已完成，无法再获得碎片' });
+    }
+    if (isWishFull(wish)) {
+      return res.json({ code: 1, message: '愿望碎片已集满，请先合成' });
+    }
+
     const currentStars = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'current_stars')) || 0;
     const drawCount = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'draw_count')) || 0;
     const halfDrawCount = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'half_draw_count')) || 0;
@@ -197,27 +212,18 @@ router.post('/manual', async (req, res) => {
       await req.redis.hincrby(`wishstar:user:${userId}`, 'half_draw_count', -1);
     }
 
-    // 获取愿望信息
-    const wish = await req.redis.hgetall(`wishstar:wish:${wishId}`);
-    if (!wish || !wish.id) {
-      return res.json({ code: 1, message: '愿望不存在' });
-    }
-
     const now = Date.now();
 
     // 增加1个碎片
-    const newFragments = await req.redis.hincrby(`wishstar:wish:${wishId}`, 'current_fragments', 1);
-    await req.redis.hset(`wishstar:wish:${wishId}`, 'updated_at', now.toString());
+    const newFragments = await req.redis.hincrby(`${PREFIX}:${wishId}`, 'current_fragments', 1);
+    await req.redis.hset(`${PREFIX}:${wishId}`, 'updated_at', now.toString());
 
-    const totalFragments = parseInt(wish.total_fragments) || 10;
-    const isFull = newFragments >= totalFragments;
+    const totalFragments = getTotalFragments(wish);
+    const isFull = !isGeneralWish(wish) && newFragments >= totalFragments;
 
     // 如果集满，进入「已集满待合成」状态
     if (isFull) {
-      await req.redis.hset(`wishstar:wish:${wishId}`, {
-        status: 'ready',
-        updated_at: now.toString()
-      });
+      await markWishReady(req.redis, { ...wish, current_fragments: String(newFragments) }, now);
     }
 
     // 记录抽卡
@@ -234,13 +240,14 @@ router.post('/manual', async (req, res) => {
     await req.redis.lpush(`wishstar:draws:${userId}`, JSON.stringify(drawRecord));
 
     // 记录流水
+    const fragmentsText = formatFragments({ ...wish, current_fragments: String(newFragments) });
     let logDescription = '';
     if (drawType === 'free') {
-      logDescription = `线下抽卡记录：消耗1次抽卡次数，「${wish.name}」获得1个碎片(${newFragments}/${totalFragments})`;
+      logDescription = `线下抽卡记录：消耗1次抽卡次数，「${wish.name}」获得1个碎片(${fragmentsText})`;
     } else if (drawType === 'normal') {
-      logDescription = `线下抽卡记录：消耗5颗星星，「${wish.name}」获得1个碎片(${newFragments}/${totalFragments})`;
+      logDescription = `线下抽卡记录：消耗5颗星星，「${wish.name}」获得1个碎片(${fragmentsText})`;
     } else if (drawType === 'half') {
-      logDescription = `线下抽卡记录：消耗3颗星星+1次半价次数，「${wish.name}」获得1个碎片(${newFragments}/${totalFragments})`;
+      logDescription = `线下抽卡记录：消耗3颗星星+1次半价次数，「${wish.name}」获得1个碎片(${fragmentsText})`;
     }
 
     const log = {

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { ensureToday } = require('../services/dailyState');
+const { ensureWishFreshAll, isGeneralWish } = require('../services/wishState');
 
 // 获取用户统计
 router.get('/', async (req, res) => {
@@ -35,14 +36,18 @@ router.get('/', async (req, res) => {
       }
     }
 
-    // 获取愿望统计
-    const wishIds = await req.redis.smembers(`wishstar:wishes:index:${userId}`);
+    // 获取愿望统计（先刷新状态，过期的要实时算进去）
+    const wishes = await ensureWishFreshAll(req.redis, userId);
     let completedWishes = 0;
+    let expiredWishes = 0;
 
-    for (const wishId of wishIds) {
-      const wish = await req.redis.hgetall(`wishstar:wish:${wishId}`);
-      if (wish && wish.status === 'completed') {
+    for (const wish of wishes) {
+      // 通用愿望永远不算「已完成」
+      if (wish.status === 'completed' && !isGeneralWish(wish)) {
         completedWishes++;
+      }
+      if (wish.status === 'expired') {
+        expiredWishes++;
       }
     }
 
@@ -62,6 +67,7 @@ router.get('/', async (req, res) => {
         diceCount: diceCount,
         halfDrawCount: halfDrawCount,
         completedWishes,
+        expiredWishes,
         totalTasks,
         activeTasks
       }
