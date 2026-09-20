@@ -41,10 +41,14 @@ function createApp({ store, serveStatic, staticDir }) {
 
   // 桌面版：托管前端静态资源（frontend/dist），单页应用回退到 index.html
   if (serveStatic && staticDir) {
-    app.use(express.static(staticDir));
+    // res.sendFile 只接受绝对路径（express.static 能容忍相对路径），
+    // 这里统一解析一次，避免 STATIC_DIR 写成相对路径时直接抛 TypeError
+    const absoluteStaticDir = path.resolve(staticDir);
+
+    app.use(express.static(absoluteStaticDir));
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api/')) return next();
-      res.sendFile(path.join(staticDir, 'index.html'), (err) => {
+      res.sendFile(path.join(absoluteStaticDir, 'index.html'), (err) => {
         if (err) next();
       });
     });
