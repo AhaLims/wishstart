@@ -83,7 +83,7 @@
         <select v-model="selectedWishId" class="input">
           <option value="">请选择愿望</option>
           <option v-for="wish in wishes" :key="wish.id" :value="wish.id">
-            {{ wish.name }} ({{ wish.current_fragments }}/{{ wish.total_fragments }})
+            {{ wish.name }} ({{ fragmentsText(wish) }})
           </option>
         </select>
       </div>
@@ -102,7 +102,7 @@
       <h3>🎉 抽卡结果</h3>
       <div class="result-wish">{{ lastResult.wishName }}</div>
       <div class="result-fragments">
-        获得碎片：{{ lastResult.currentFragments }} / {{ lastResult.totalFragments }}
+        获得碎片：{{ fragmentsText(lastResult) }}
       </div>
       <div v-if="lastResult.isReady" class="complete-badge">
         🎊 愿望已集满，可以合成了！
@@ -145,10 +145,25 @@ const canSubmitManual = computed(() => {
   return canDraw.value
 })
 
+// 碎片展示：通用愿望（无上限）只显示当前数量，不带分母
+const fragmentsText = (w) => {
+  if (!w) return ''
+  const current = parseInt(w.current_fragments ?? w.currentFragments) || 0
+  const total = parseInt(w.total_fragments ?? w.totalFragments) || 0
+  return total > 0 ? `${current}/${total}` : `${current}`
+}
+
 const fetchWishes = async () => {
   const res = await wishApi.getWishes(userStore.userId)
   if (res.code === 0) {
-    wishes.value = res.data.filter(w => w.status !== 'completed')
+    // 只有「收集中且未集满」的愿望还能获得碎片，
+    // 已过期 / 已完成 / 已集满的都会被后端拒绝，不必出现在下拉里
+    wishes.value = res.data.filter(w => {
+      if (w.status !== 'collecting') return false
+      if (w.wish_type === 'general') return true
+      const total = parseInt(w.total_fragments) || 0
+      return total <= 0 || (parseInt(w.current_fragments) || 0) < total
+    })
   }
 }
 
