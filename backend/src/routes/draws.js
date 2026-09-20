@@ -245,7 +245,8 @@ router.post('/manual', async (req, res) => {
       id: uuidv4(),
       type: 'expenditure',
       category: 'draw',
-      amount: 0,
+      // 跟线上抽卡一样记实际花掉的星星：免费档 cost.stars 是 0，这里自然就是 0
+      amount: -cost.stars,
       description: logDescription,
       created_at: now
     };
