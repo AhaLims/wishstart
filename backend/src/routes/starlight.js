@@ -13,7 +13,7 @@ const {
   completeStarlightTask,
   collectStars
 } = require('../services/starlight');
-const { countRemaining, countTotal } = require('../services/spirits');
+const { countRemaining, countTotal, enrichDraw } = require('../services/spirits');
 
 // 页面上展示多久以内的流水。存储里不删，只是不往页面上搬。
 const STARLIGHT_LOG_DAYS = 7;
@@ -44,8 +44,12 @@ async function buildState(store, userId) {
 
   // 今日抽到的精灵（抽到的先后顺序），以及池子里还剩多少只没抽到。
   // poolTotal 是给前端分辨「今天抽完了」和「池子没加载出来」用的。
-  const todayDraws = await loadDraws(store, userId, state.date);
-  const poolRemaining = countRemaining(new Set(todayDraws.map((d) => d.number)));
+  //
+  // 这里就把详情（立绘、介绍、属性…）补全，而不是另开一个「查精灵详情」的接口：
+  // 卡片点开的详情弹窗用的就是这份数据，数据本来就在池子内存里，现查是零成本的，
+  // 多跑一趟接口只会让弹窗多转一次圈。按 id 而不是编号去重，理由同 services 那边。
+  const todayDraws = (await loadDraws(store, userId, state.date)).map(enrichDraw);
+  const poolRemaining = countRemaining(new Set(todayDraws.map((d) => d.id).filter(Boolean)));
 
   return {
     ...state,

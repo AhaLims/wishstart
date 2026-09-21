@@ -98,12 +98,12 @@
         <div class="result-title">抽到精灵啦</div>
         <div class="result-body">
           <div class="result-thumb">
-            <img v-if="!broken[result.spirit.number]" :src="result.spirit.headUrl"
-                 :alt="result.spirit.name" @error="markBroken(result.spirit.number)" />
+            <img v-if="!broken[result.spirit.id]" :src="result.spirit.headUrl"
+                 :alt="result.spirit.name" @error="markBroken(result.spirit.id)" />
             <span v-else class="sprite-placeholder">🔮</span>
           </div>
           <div class="result-info">
-            <div class="result-name">{{ result.spirit.name }}</div>
+            <div class="result-name">{{ displayName(result.spirit) }}</div>
             <div class="result-star number">+{{ result.earned }} <span class="result-unit">星光值</span></div>
             <div class="result-no">No.{{ result.spirit.number }}</div>
           </div>
@@ -123,22 +123,32 @@
     </div>
 
     <div v-if="state.todayDraws.length" class="sprite-grid">
-      <div v-for="sprite in state.todayDraws" :key="sprite.number" class="sprite-card">
+      <!-- key 用 id 不用编号：同一个编号下挂着本体 / 地区形态 / 首领化 / 异色，
+           编号会重复，拿它当 key 会让 Vue 报重复 key 并且渲染错位 -->
+      <button
+        v-for="sprite in state.todayDraws"
+        :key="sprite.id || sprite.at"
+        class="sprite-card"
+        :title="`点开看「${displayName(sprite)}」的详情`"
+        @click="openDetail(sprite)"
+      >
         <div class="sprite-thumb">
-          <img v-if="!broken[sprite.number]" :src="sprite.headUrl"
-               :alt="sprite.name" @error="markBroken(sprite.number)" />
+          <img v-if="!broken[sprite.id]" :src="sprite.headUrl"
+               :alt="sprite.name" @error="markBroken(sprite.id)" />
           <span v-else class="sprite-placeholder">🔮</span>
           <span class="sprite-no">{{ sprite.number }}</span>
+          <!-- 异色的名字和头像跟本体一模一样，不给个角标就是两只一样的卡片 -->
+          <span v-if="sprite.isShiny" class="sprite-shiny" title="异色">✨</span>
         </div>
-        <div class="sprite-name">{{ sprite.name }}</div>
+        <div class="sprite-name">{{ displayName(sprite) }}</div>
         <div class="sprite-star number">★ {{ sprite.star }}</div>
-      </div>
+      </button>
     </div>
 
     <div v-else class="card empty-state sprite-empty">
       <div class="empty-state-icon">🔍</div>
       <p v-if="state.poolTotal > 0">今天还没抽到精灵，完成一次星光值任务试试</p>
-      <p v-else>没有读到精灵数据，检查一下数据目录里有没有 data/spirits.jsonl</p>
+      <p v-else>没有读到精灵数据，检查一下数据目录里有没有 data/entities.json</p>
     </div>
 
     <!-- 流水 -->
@@ -188,6 +198,40 @@
         </div>
       </div>
     </div>
+
+    <!-- 精灵详情：点「今日抽到的精灵」里任意一张卡片打开。
+         数据是跟着「今日抽到的精灵」一起从后端来的，点开就有，不转圈。 -->
+    <div v-if="detail" class="modal-overlay" @click.self="closeDetail">
+      <div class="modal spirit-modal">
+        <button class="spirit-close" title="关闭" @click="closeDetail">✕</button>
+
+        <div class="spirit-art">
+          <img v-if="!artBroken && detail.artUrl" :src="detail.artUrl"
+               :alt="detail.name" @error="artBroken = true" />
+          <span v-else class="sprite-placeholder">🔮</span>
+        </div>
+
+        <h3 class="spirit-name">
+          {{ detail.name }}<span v-if="detail.isShiny" class="spirit-shiny-word">（异色）</span>
+        </h3>
+        <div class="spirit-no">No.{{ detail.number }}</div>
+
+        <div class="spirit-tags">
+          <span v-if="detail.formLabel" class="spirit-tag tag-form">{{ detail.formLabel }}</span>
+          <span v-for="t in detail.types" :key="t" class="spirit-tag tag-type">{{ t }}</span>
+          <span v-if="detail.kicker" class="spirit-tag">{{ detail.kicker }}</span>
+          <span v-if="detail.stage" class="spirit-tag">{{ detail.stage }}</span>
+          <span v-if="detail.season" class="spirit-tag">{{ detail.season }}</span>
+        </div>
+
+        <div class="spirit-star number">
+          ★ {{ detail.star }}<span class="spirit-star-unit">星光值</span>
+        </div>
+
+        <p v-if="detail.desc" class="spirit-desc">{{ detail.desc }}</p>
+        <p v-else class="spirit-desc spirit-desc-empty">这只精灵没有收录介绍</p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -223,11 +267,31 @@ let resultTimer = null
 // 正在抽精灵的任务 id（空串 = 没有请求在飞），用来在请求期间禁用「完成」按钮
 const completingId = ref('')
 
-// 头像加载失败（图还没拷全）就换成占位符，不显示破图
+// 头像加载失败（图还没拷全）就换成占位符，不显示破图。
+// 按 id 记，不能按编号 —— 同一个编号下有好几只，其中一只缺图不该把另一只也变成占位符。
 const broken = ref({})
-const markBroken = (number) => {
-  broken.value = { ...broken.value, [number]: true }
+const markBroken = (id) => {
+  broken.value = { ...broken.value, [id]: true }
 }
+
+// 精灵详情弹窗。数据跟着「今日抽到的精灵」一起来，所以这里只是把已经拿到的那条
+// 展开，不重新请求（详情字段见后端 spirits.js 的 enrichDraw）。
+const detail = ref(null)
+// 立绘加载失败时退回占位符。立绘是 1024×1024 的大图，采集没跑完的话可能缺
+const artBroken = ref(false)
+
+const openDetail = (sprite) => {
+  artBroken.value = false
+  detail.value = sprite
+}
+
+const closeDetail = () => {
+  detail.value = null
+}
+
+// 异色在 wiki 上不是独立条目，名字跟本体逐字相同（193 只全是这样），
+// 所以卡片和弹窗上都补一个「（异色）」，不然看起来就是同一只精灵抽到了两次
+const displayName = (sprite) => (sprite.isShiny ? `${sprite.name}（异色）` : sprite.name)
 
 const showModal = ref(false)
 const editingId = ref('')
@@ -635,12 +699,42 @@ onMounted(fetchState)
   margin-bottom: 2rem;
 }
 
+/* 整张卡是个 <button>（点开精灵详情），所以得先把浏览器的默认按钮样式清掉，
+   否则会顶着一圈灰色凸起和系统字体，跟旁边的卡片对不上 */
 .sprite-card {
+  font: inherit;
+  color: inherit;
+  width: 100%;
   background: rgba(22, 33, 62, 0.8);
   border: 1px solid rgba(74, 144, 217, 0.2);
   border-radius: 12px;
   padding: 0.6rem;
   text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sprite-card:hover {
+  border-color: rgba(74, 144, 217, 0.6);
+  background: rgba(74, 144, 217, 0.14);
+  transform: translateY(-2px);
+}
+
+.sprite-card:active {
+  transform: translateY(0);
+}
+
+/* 异色角标：异色的名字和头像跟本体逐字一样，只看卡片分不出是哪一只 */
+.sprite-shiny {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(255, 215, 0, 0.9);
+  color: #1A1A2E;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .sprite-thumb {
@@ -690,6 +784,130 @@ onMounted(fetchState)
 
 .sprite-empty {
   margin-bottom: 2rem;
+}
+
+/* ---- 精灵详情弹窗 ---- */
+
+.spirit-modal {
+  position: relative;
+  max-width: 420px;
+  text-align: center;
+}
+
+.spirit-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #B0B0B0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.spirit-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+/* 立绘是 1024×1024 的方图。限一下尺寸，不然矮屏幕上整张弹窗要滚动才能看完 */
+.spirit-art {
+  width: 100%;
+  max-width: 300px;
+  margin: 0 auto;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: radial-gradient(circle at 50% 45%, rgba(74, 144, 217, 0.22) 0%, rgba(26, 26, 46, 0.9) 70%);
+  border: 1px solid rgba(74, 144, 217, 0.25);
+  overflow: hidden;
+}
+
+.spirit-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.spirit-name {
+  margin-top: 1rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #FFD700;
+}
+
+.spirit-shiny-word {
+  font-size: 0.9rem;
+}
+
+.spirit-no {
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+.spirit-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: center;
+  margin-top: 0.75rem;
+}
+
+.spirit-tag {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.75rem;
+  color: #B0B0B0;
+}
+
+/* 形态标签回答的是「这只是什么来头」，给个区分色；属性用蓝色 */
+.spirit-tag.tag-form {
+  background: rgba(255, 215, 0, 0.12);
+  border-color: rgba(255, 215, 0, 0.35);
+  color: #FFD700;
+}
+
+.spirit-tag.tag-type {
+  background: rgba(74, 144, 217, 0.15);
+  border-color: rgba(74, 144, 217, 0.4);
+  color: #7FB2FF;
+}
+
+.spirit-star {
+  margin-top: 0.85rem;
+  font-size: 1.2rem;
+  color: #7FB2FF;
+}
+
+.spirit-star-unit {
+  margin-left: 0.3rem;
+  font-size: 0.8rem;
+  color: #B0B0B0;
+}
+
+.spirit-desc {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(74, 144, 217, 0.15);
+  font-size: 0.88rem;
+  line-height: 1.8;
+  color: rgba(255, 255, 255, 0.75);
+  text-align: left;
+}
+
+.spirit-desc-empty {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.35);
 }
 
 .pool-note {

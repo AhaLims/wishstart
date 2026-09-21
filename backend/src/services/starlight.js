@@ -14,7 +14,7 @@
 // 不要把它接到统计页那份星星流水上。
 const { v4: uuidv4 } = require('uuid');
 const { getBeijingDate } = require('./beijingDate');
-const { drawSpirit, headUrlFor, countTotal } = require('./spirits');
+const { drawSpirit, enrichDraw, resolveDrawEntity, countTotal } = require('./spirits');
 const { withLock } = require('../utils/lock');
 
 // 当天第 N 颗许愿星需要多少星光值。数组下标 0 就是「当天第 1 颗」。
@@ -172,14 +172,22 @@ async function completeStarlightTask(store, task, now = new Date()) {
     // 否则刚加上的星光值会被紧接着的每日清零抹掉
     await ensureStarlight(store, userId, now);
 
-    // 不放回：把今天已经抽到过的编号排除掉
+    // 不放回：把今天已经抽到过的**实体**排除掉，按 id 不按编号 ——
+    // 同一个编号下挂着本体 / 地区形态 / 首领化 / 异色，它们是各自独立的四只。
+    // 老记录里没有 id，resolveDrawEntity 会按编号还原成默认卡，语义正好对上。
     const drawn = await loadDraws(store, userId, date);
-    const spirit = drawSpirit(new Set(drawn.map((d) => d.number)));
+    const excludeIds = new Set();
+    for (const d of drawn) {
+      const e = resolveDrawEntity(d);
+      if (e) excludeIds.add(e.id);
+    }
+
+    const spirit = drawSpirit(excludeIds);
     if (!spirit) {
       // drawSpirit 在两种情况下都是 null：今天的抽完了，或者池子根本没读出来。
       // 后者是数据目录配错了，得说清楚，不然会被当成「今天没得抽了」白等一天。
       if (countTotal() === 0) {
-        return { error: '精灵池是空的，检查一下数据目录里有没有 data/spirits.jsonl' };
+        return { error: '精灵池是空的，检查一下数据目录里有没有 data/entities.json' };
       }
       return { error: '今天的精灵都抽完了，明天再来吧' };
     }
@@ -189,11 +197,14 @@ async function completeStarlightTask(store, task, now = new Date()) {
     await store.hincrby(stateKey(userId), 'value', earned);
     await store.hincrby(stateKey(userId), 'today_earned', earned);
 
+    // 记录里只存 id 和几个展示字段，详情（立绘、介绍、属性…）在读取时现查池子，
+    // 见 spirits.js 的 enrichDraw()。这样图鉴更新之后详情跟着新，记录也不臃肿。
     const draw = {
+      id: spirit.id,
       number: spirit.number,
       name: spirit.name,
       star: earned,
-      headUrl: headUrlFor(spirit),
+      headUrl: spirit.headUrl,
       at: now.getTime()
     };
     await store.zadd(drawsKey(userId, date), draw.at, JSON.stringify(draw));
@@ -216,7 +227,9 @@ async function completeStarlightTask(store, task, now = new Date()) {
     });
 
     const state = await ensureStarlight(store, userId, now);
-    return { spirit: draw, earned, state, completeCount: newComplete };
+    // 返回补全过的形状，跟「今日抽到的精灵」里那些保持一致 ——
+    // 两处形状不一样的话，前端为结果卡和卡片写两套字段很容易漏。
+    return { spirit: enrichDraw(draw), earned, state, completeCount: newComplete };
   });
 }
 
