@@ -84,6 +84,17 @@ export const workApi = {
   getStatus: (userId) => api.get(`/work/status?userId=${userId}`)
 }
 
+// 星光值 API（独立于星星体系的小玩法）
+export const starlightApi = {
+  getState: (userId) => api.get(`/starlight?userId=${userId}`),
+  createTask: (data) => api.post('/starlight/tasks', data),
+  updateTask: (taskId, data) => api.put(`/starlight/tasks/${taskId}`, data),
+  deleteTask: (taskId) => api.delete(`/starlight/tasks/${taskId}`),
+  completeTask: (taskId) => api.post(`/starlight/tasks/${taskId}/complete`),
+  // 不传 count 就是把待入库的全部收走
+  collect: (userId, count) => api.post('/starlight/collect', { userId, count })
+}
+
 // 同步 API
 export const syncApi = {
   exportSnapshot: () => api.get('/sync/export'),
