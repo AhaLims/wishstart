@@ -192,7 +192,10 @@ async function completeStarlightTask(store, task, now = new Date()) {
       return { error: '今天的精灵都抽完了，明天再来吧' };
     }
 
-    const earned = spirit.star;
+    // 特殊形态（异色 / 地区形态 / 首领化）星光值翻倍。
+    // spirit.star 是图鉴上的基础值，乘完这个才是真正进账的数 ——
+    // 进账、流水、记录里存的都是乘完的，只有星图鉴上那个基础值留在池子里。
+    const earned = spirit.star * spirit.starMultiplier;
 
     await store.hincrby(stateKey(userId), 'value', earned);
     await store.hincrby(stateKey(userId), 'today_earned', earned);
@@ -223,7 +226,9 @@ async function completeStarlightTask(store, task, now = new Date()) {
       category: 'starlight_task',
       amount: earned,
       unit: '星光值',
-      description: `抽到「${spirit.name}」获得 ${earned} 星光值`
+      description: `抽到「${spirit.name}」获得 ${earned} 星光值` +
+        // 翻倍了就得说一声：流水上的数字比图鉴上大，不解释看着像算错
+        (spirit.starMultiplier > 1 ? `（异色/特殊形态 ×${spirit.starMultiplier}）` : '')
     });
 
     const state = await ensureStarlight(store, userId, now);

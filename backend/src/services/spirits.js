@@ -46,6 +46,21 @@ const FORM_LABELS = {
   'lord|regional': '首领化 · 地区形态'
 };
 
+// 抽到特殊形态（异色 / 地区形态 / 首领化）星光值翻倍。图鉴上的值是基础值，
+// 乘完才是真正进账的数。
+const SPECIAL_MULTIPLIER = 2;
+
+// 哪些 form 算「特殊」。用白名单而不是「不等于 main」——
+// form 字段哪天没给或者多出一个新值，白名单是「不加倍」，反着写是「全场翻倍」。
+// 悄悄少给比悄悄多发好收拾。
+// 异色要看 kind：异色本体的 form 是 main（地区形态的异色 form 才是 regional）。
+const SPECIAL_FORMS = new Set(['regional', 'main|regional', 'lord', 'lord|regional']);
+
+function isSpecialForm(raw) {
+  if (raw.kind === 'shiny') return true;
+  return SPECIAL_FORMS.has(raw.form);
+}
+
 // 启动时填一次，之后一直是它（见文件头注释）
 let cache = null;
 
@@ -123,11 +138,14 @@ function normalize(raw, rawById) {
     id: String(raw.id),
     number: String(raw.number),
     name,
+    // 图鉴上的**基础**星光值，不含形态加成 —— 抽到手时是 star * starMultiplier
     star,
     kind: raw.kind || 'base',
     isShiny: raw.kind === 'shiny',
     isDefault: !!raw.isDefault,
     formLabel: formLabelOf(raw),
+    // 抽到这只时星光值乘多少（1 或 2）。乘的是下面的 star（图鉴上的基础值）
+    starMultiplier: isSpecialForm(raw) ? SPECIAL_MULTIPLIER : 1,
     // 详情弹窗要的
     desc: raw.desc || null,
     kicker: raw.kicker || null,
@@ -215,8 +233,11 @@ function enrichDraw(record) {
     id: e ? e.id : (record.id || null),
     number: record.number,
     name: record.name,
-    // 本次获得的星光值。跟图鉴上的值可能因数据更新而不同，所以按记录里的来
+    // 本次获得的星光值（**已经乘过形态加成**）。跟图鉴上的值可能因数据更新而不同，
+    // 所以按记录里的来 —— 注意它不等于 e.star，e.star 是基础值
     star: record.star,
+    // 这次翻了几倍。前端拿它决定要不要标「×2」，不用自己重推一遍规则
+    starMultiplier: e ? e.starMultiplier : 1,
     headUrl: record.headUrl || (e ? e.headUrl : null),
     at: record.at,
     // 小卡片上区分异色用
@@ -257,6 +278,7 @@ loadSpirits();
 module.exports = {
   DATA_DIR,
   STAR_FALLBACK,
+  SPECIAL_MULTIPLIER,
   SPIRITS_URL_PREFIX,
   HEADS_URL_PREFIX,
   ART_URL_PREFIX,

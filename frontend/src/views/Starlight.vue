@@ -104,7 +104,12 @@
           </div>
           <div class="result-info">
             <div class="result-name">{{ displayName(result.spirit) }}</div>
-            <div class="result-star number">+{{ result.earned }} <span class="result-unit">星光值</span></div>
+            <div class="result-star number">
+              +{{ result.earned }} <span class="result-unit">星光值</span>
+              <span v-if="result.spirit.starMultiplier > 1" class="star-boost" :title="BOOST_TITLE">
+                ×{{ result.spirit.starMultiplier }}
+              </span>
+            </div>
             <div class="result-no">No.{{ result.spirit.number }}</div>
           </div>
         </div>
@@ -140,7 +145,12 @@
           <span v-if="sprite.isShiny" class="sprite-shiny" title="异色">✨</span>
         </div>
         <div class="sprite-name">{{ displayName(sprite) }}</div>
-        <div class="sprite-star number">★ {{ sprite.star }}</div>
+        <div class="sprite-star number">
+          ★ {{ sprite.star }}
+          <span v-if="sprite.starMultiplier > 1" class="star-boost" :title="BOOST_TITLE">
+            ×{{ sprite.starMultiplier }}
+          </span>
+        </div>
       </button>
     </div>
 
@@ -225,6 +235,9 @@
 
         <div class="spirit-star number">
           ★ {{ detail.star }}<span class="spirit-star-unit">星光值</span>
+          <span v-if="detail.starMultiplier > 1" class="star-boost" :title="BOOST_TITLE">
+            ×{{ detail.starMultiplier }}
+          </span>
         </div>
 
         <p v-if="detail.desc" class="spirit-desc">{{ detail.desc }}</p>
@@ -310,6 +323,11 @@ const closeDetail = () => {
 // 异色在 wiki 上不是独立条目，名字跟本体逐字相同（193 只全是这样），
 // 所以卡片和弹窗上都补一个「（异色）」，不然看起来就是同一只精灵抽到了两次
 const displayName = (sprite) => (sprite.isShiny ? `${sprite.name}（异色）` : sprite.name)
+
+// 异色 / 地区形态 / 首领化抽到时星光值翻倍，后端在 starMultiplier 里给（1 或 2）。
+// 前端只管显示，判据留在后端一处，免得两边规则各写一遍再慢慢走偏。
+// 倍数是后端算的，这里只写这句说明。
+const BOOST_TITLE = '异色 / 特殊形态，星光值翻倍'
 
 const showModal = ref(false)
 const editingId = ref('')
@@ -802,6 +820,21 @@ onMounted(fetchState)
 
 .sprite-empty {
   margin-bottom: 2rem;
+}
+
+/* 形态加成的「×2」小标。星光值是翻倍后的数，不标一下对照图鉴会以为算错了 */
+.star-boost {
+  display: inline-block;
+  margin-left: 0.3rem;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(255, 215, 0, 0.16);
+  border: 1px solid rgba(255, 215, 0, 0.45);
+  color: #FFD700;
+  font-size: 0.7rem;
+  line-height: 1.6;
+  vertical-align: 1px;
+  cursor: help;
 }
 
 /* ---- 精灵详情弹窗 ---- */
