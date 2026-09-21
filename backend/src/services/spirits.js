@@ -51,19 +51,38 @@ const FORM_LABELS = {
   'lord|regional': '首领化 · 地区形态'
 };
 
-// 抽到特殊形态（异色 / 地区形态 / 首领化）星光值翻倍。图鉴上的值是基础值，
-// 乘完才是真正进账的数。
+// 抽到特殊形态星光值翻倍，**身上每多一个特殊标签就再翻一倍**：
+//   异色 / 地区形态 / 首领化 各一个标签 → 单标签 ×2
+//   异色 + 首领化                      → ×4
+//   首领化 + 地区形态                   → ×4
+//   异色 + 首领化 + 地区形态            → ×8
+// 图鉴上的值是基础值，乘完才是真正进账的数。
+//
+// 三个标签都叠满的在池子里只有 3 只（全 814 只），是概率最低那一档，**不封顶**：
+// 封顶的话「两个标签 ×4、三个标签也 ×4」就成了要额外记的例外。
 const SPECIAL_MULTIPLIER = 2;
 
-// 哪些 form 算「特殊」。用白名单而不是「不等于 main」——
+// 每个标签各认各的，用白名单而不是「不等于 main」——
 // form 字段哪天没给或者多出一个新值，白名单是「不加倍」，反着写是「全场翻倍」。
 // 悄悄少给比悄悄多发好收拾。
-// 异色要看 kind：异色本体的 form 是 main（地区形态的异色 form 才是 regional）。
-const SPECIAL_FORMS = new Set(['regional', 'main|regional', 'lord', 'lord|regional']);
+//
+// 三个集合要分开列，因为 form 是**复合字段**：`lord|regional` 是「首领化 + 地区
+// 形态」两个标签，不是一个新的第三种形态（FORM_LABELS 里也是这么拼标签的）。
+// 异色不看 form 看 kind：异色本体的 form 是 main（地区形态的异色 form 才是 regional）。
+const REGIONAL_FORMS = new Set(['regional', 'main|regional', 'lord|regional']);
+const LORD_FORMS = new Set(['lord', 'lord|regional']);
 
-function isSpecialForm(raw) {
-  if (raw.kind === 'shiny') return true;
-  return SPECIAL_FORMS.has(raw.form);
+// 这只身上挂了几个特殊标签（0-3）。抽到时星光值按 SPECIAL_MULTIPLIER 的这次方翻。
+function specialTagCount(raw) {
+  let n = 0;
+  if (raw.kind === 'shiny') n += 1;
+  if (REGIONAL_FORMS.has(raw.form)) n += 1;
+  if (LORD_FORMS.has(raw.form)) n += 1;
+  return n;
+}
+
+function multiplierOf(raw) {
+  return SPECIAL_MULTIPLIER ** specialTagCount(raw);
 }
 
 // 启动时填一次，之后一直是它（见文件头注释）
@@ -149,8 +168,10 @@ function normalize(raw, rawById) {
     isShiny: raw.kind === 'shiny',
     isDefault: !!raw.isDefault,
     formLabel: formLabelOf(raw),
-    // 抽到这只时星光值乘多少（1 或 2）。乘的是下面的 star（图鉴上的基础值）
-    starMultiplier: isSpecialForm(raw) ? SPECIAL_MULTIPLIER : 1,
+    // 抽到这只时星光值乘多少（1 / 2 / 4 / 8，见 specialTagCount）。乘的是下面的
+    // star（图鉴上的基础值）。**抽到时要把这个数一起写进记录** —— 规则以后还会变，
+    // 不存下来的话老记录会被新规则重算错（见 enrichDraw 的注释）
+    starMultiplier: multiplierOf(raw),
     // 详情弹窗要的
     desc: raw.desc || null,
     kicker: raw.kicker || null,
@@ -232,6 +253,28 @@ function resolveDrawEntity(record) {
 // 把一条抽到记录补全成前端直接能用的形状：详情（立绘、介绍、属性…）在读取时现查
 // 池子，而不是记在流水里。这样图鉴数据更新之后详情跟着新，记录本身也不臃肿。
 // 查不到的（比如池子换了一批数据）就把能给的给出去，缺的字段前端会退化成不显示。
+// 这条记录当时翻了几倍。**优先用记录里存的那份**，不能用池子现在的规则重算 ——
+// 规则改过一次（原来不管几个标签都是 ×2，现在每多一个标签再翻一倍），拿新规则
+// 去算老记录会算错：记录里存的 star 是当时实际进账的数，倍率一变，前端
+// `star / starMultiplier` 除回去得到的基础星光值就跟着错。实测线上就有两条这样的
+// 记录（一条异色+地区形态、一条首领化+地区形态），新规则下基础值会从 40 变成 10。
+//
+// 老记录没存倍率（本次改动之前抽的），用「进账 ÷ 图鉴基础值」反推：进账一定是
+// 基础值乘某个倍率得来的，能整除就说明反推对了。图鉴值本身改过就推不出来，
+// 那种情况当没翻倍 —— 显示成「就是这么多」总比显示一个错的基础值好。
+const KNOWN_MULTIPLIERS = new Set([1, 2, 4, 8]);
+
+function multiplierOfRecord(record, entity) {
+  const stored = parseInt(record.starMultiplier);
+  if (Number.isFinite(stored) && KNOWN_MULTIPLIERS.has(stored)) return stored;
+
+  const base = entity ? parseInt(entity.star) : 0;
+  const earned = parseInt(record.star);
+  if (!base || !Number.isFinite(earned)) return 1;
+  const ratio = earned / base;
+  return KNOWN_MULTIPLIERS.has(ratio) ? ratio : 1;
+}
+
 function enrichDraw(record) {
   const e = resolveDrawEntity(record);
   return {
@@ -241,8 +284,9 @@ function enrichDraw(record) {
     // 本次获得的星光值（**已经乘过形态加成**）。跟图鉴上的值可能因数据更新而不同，
     // 所以按记录里的来 —— 注意它不等于 e.star，e.star 是基础值
     star: record.star,
-    // 这次翻了几倍。前端拿它决定要不要标「×2」，不用自己重推一遍规则
-    starMultiplier: e ? e.starMultiplier : 1,
+    // 这次翻了几倍（1/2/4/8）。前端拿它决定要不要标「×N」、以及除回去算基础值，
+    // 不用自己重推一遍规则。**看的是记录当时那份，不是池子现在的规则**
+    starMultiplier: multiplierOfRecord(record, e),
     headUrl: record.headUrl || (e ? e.headUrl : null),
     at: record.at,
     // 小卡片上区分异色用

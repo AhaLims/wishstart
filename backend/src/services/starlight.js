@@ -192,9 +192,9 @@ async function completeStarlightTask(store, task, now = new Date()) {
       return { error: '今天的精灵都抽完了，明天再来吧' };
     }
 
-    // 特殊形态（异色 / 地区形态 / 首领化）星光值翻倍。
+    // 特殊形态（异色 / 地区形态 / 首领化）星光值翻倍，每多一个标签再翻一倍。
     // spirit.star 是图鉴上的基础值，乘完这个才是真正进账的数 ——
-    // 进账、流水、记录里存的都是乘完的，只有星图鉴上那个基础值留在池子里。
+    // 进账、流水、记录里存的都是乘完的，只有图鉴上那个基础值留在池子里。
     const earned = spirit.star * spirit.starMultiplier;
 
     await store.hincrby(stateKey(userId), 'value', earned);
@@ -207,6 +207,10 @@ async function completeStarlightTask(store, task, now = new Date()) {
       number: spirit.number,
       name: spirit.name,
       star: earned,
+      // 当时翻了几个倍（1/2/4/8）。**必须存进记录**：倍率规则改过，前端要用它把
+      // 进账除回去算出图鉴基础值，拿池子现在的规则去算老记录会算错。
+      // 详见 spirits.js 的 multiplierOfRecord()
+      starMultiplier: spirit.starMultiplier,
       headUrl: spirit.headUrl,
       at: now.getTime()
     };
@@ -227,8 +231,10 @@ async function completeStarlightTask(store, task, now = new Date()) {
       amount: earned,
       unit: '星光值',
       description: `抽到「${spirit.name}」获得 ${earned} 星光值` +
-        // 翻倍了就得说一声：流水上的数字比图鉴上大，不解释看着像算错
-        (spirit.starMultiplier > 1 ? `（异色/特殊形态 ×${spirit.starMultiplier}）` : '')
+        // 翻倍了就得说一声：流水上的数字比图鉴上大，不解释看着像算错。
+        // 用 formLabel 把**是哪几个标签**写出来（「首领化 · 地区形态 ×4」），
+        // 笼统写「异色/特殊形态」看不出 4 倍是怎么来的
+        (spirit.starMultiplier > 1 ? `（${spirit.formLabel} ×${spirit.starMultiplier}）` : '')
     });
 
     const state = await ensureStarlight(store, userId, now);

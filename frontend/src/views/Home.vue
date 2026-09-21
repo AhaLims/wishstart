@@ -59,10 +59,10 @@
             没有次数了 —— 时间型每 5 颗星星换 1 次
           </p>
 
-          <!-- 线下补记的入口。没有次数时它自己也置灰，跟上面的掷骰子按钮同步。
-               不点开再让人看见一个灰的「记录」—— 弹窗白开一次，还不如入口直接说明
-               （置灰的链接仍然在页面上，功能是看得见的）。 -->
-          <button class="roll-link" :disabled="dice.diceCount <= 0" @click="showManualDice = true">
+          <!-- 线下补记的入口。**没有次数时也不置灰**，照样点得开 —— 置灰的链接点下去
+               什么都不发生，跟坏了没区别（真有人这么报过 bug）。现在点开之后弹窗里
+               会明说「没有次数了」，比一个没反应的灰链接清楚。 -->
+          <button class="roll-link" @click="showManualDice = true">
             线下掷的？自己记一笔 →
           </button>
         </div>
@@ -142,6 +142,11 @@
         <h3 class="modal-title">线下掷骰子</h3>
         <p class="modal-hint">
           在线下掷了骰子就在这里记一笔，同样消耗 1 次掷骰子次数
+        </p>
+        <!-- 没次数时把原因说出来。上面的掷骰子按钮是置灰的，那是看得见的；
+             但入口点进来只看见一个灰的「记录」就只剩困惑，所以这里必须解释 -->
+        <p v-if="dice.diceCount <= 0" class="modal-warn">
+          没有掷骰子次数了 —— 当日时间型星星每满 5 颗换 1 次，用掉的不退回
         </p>
         <div class="form-group">
           <label class="label">点数（1-6）</label>
@@ -432,7 +437,7 @@ const submitQuickRecord = async () => {
 }
 
 /* 线下补记的入口。做成文字链而不是按钮：它是「另一条路」，
-   跟上面那个主按钮抢注意力就不好了 */
+   跟上面那个主按钮抢注意力就不好了。**没有次数时也不置灰**（见模板里的注释） */
 .roll-link {
   display: block;
   margin: 0.75rem auto 0;
@@ -446,14 +451,8 @@ const submitQuickRecord = async () => {
   transition: opacity 0.2s ease;
 }
 
-.roll-link:hover:not(:disabled) {
+.roll-link:hover {
   opacity: 0.75;
-}
-
-.roll-link:disabled {
-  color: #B0B0B0;
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .roll-result {
@@ -537,6 +536,18 @@ const submitQuickRecord = async () => {
   color: #B0B0B0;
   font-size: 0.85rem;
   margin: -0.75rem 0 1rem;
+}
+
+/* 说明「为什么记录是灰的」。是提示不是报错，所以用暖色不用红 */
+.modal-warn {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(255, 165, 0, 0.12);
+  border: 1px solid rgba(255, 165, 0, 0.3);
+  color: #FFC46B;
+  font-size: 0.85rem;
+  line-height: 1.5;
 }
 
 .radio-group {
