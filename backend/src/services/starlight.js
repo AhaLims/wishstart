@@ -222,33 +222,41 @@ async function completeStarlightTask(store, task, now = new Date()) {
 
 // 入库：把待入库的许愿星收进「凝结许愿星总数」
 async function collectStars(store, userId, count, now = new Date()) {
-  const state = await ensureStarlight(store, userId, now);
+  // 「读待入库 → 判断够不够 → 扣掉」整段串行，跟 completeStarlightTask 用同一把锁
+  // （两者都在动同一个 hash）。
+  //
+  // 不传 count 时后端按「待入库的全部」收，这正是并发下最危险的形式：
+  // 两个请求各自读到 pending=3，各自认为「全部就是 3」，于是各扣 3 各加 3 ——
+  // 待入库直接变负数，已入库凭空多一倍。
+  return withLock(`starlight:${userId}`, async () => {
+    const state = await ensureStarlight(store, userId, now);
 
-  // 先单独判「没得收」——不然待入库为 0 时会在下面被误报成「数量不合法」
-  if (state.pending < 1) {
-    return { error: '现在没有待入库的许愿星' };
-  }
+    // 先单独判「没得收」——不然待入库为 0 时会在下面被误报成「数量不合法」
+    if (state.pending < 1) {
+      return { error: '现在没有待入库的许愿星' };
+    }
 
-  const want = count === undefined || count === null ? state.pending : count;
-  if (!Number.isInteger(want) || want < 1) {
-    return { error: '入库数量不合法' };
-  }
-  if (want > state.pending) {
-    return { error: '待入库的许愿星不够' };
-  }
+    const want = count === undefined || count === null ? state.pending : count;
+    if (!Number.isInteger(want) || want < 1) {
+      return { error: '入库数量不合法' };
+    }
+    if (want > state.pending) {
+      return { error: '待入库的许愿星不够' };
+    }
 
-  await store.hincrby(stateKey(userId), 'pending', -want);
-  await store.hincrby(stateKey(userId), 'banked', want);
+    await store.hincrby(stateKey(userId), 'pending', -want);
+    await store.hincrby(stateKey(userId), 'banked', want);
 
-  await addLog(store, userId, {
-    type: 'income',
-    category: 'starlight_collect',
-    amount: want,
-    unit: '颗',
-    description: `收起 ${want} 颗许愿星，放进了仓库`
+    await addLog(store, userId, {
+      type: 'income',
+      category: 'starlight_collect',
+      amount: want,
+      unit: '颗',
+      description: `收起 ${want} 颗许愿星，放进了仓库`
+    });
+
+    return { collected: want, state: await ensureStarlight(store, userId, now) };
   });
-
-  return { collected: want, state: await ensureStarlight(store, userId, now) };
 }
 
 module.exports = {

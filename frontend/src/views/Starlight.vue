@@ -55,7 +55,7 @@
       <p class="pending-hint">
         点一下就把这 {{ state.pending }} 颗全部收进仓库（不点也不会消失，明天还在）
       </p>
-      <button class="pending-stars" title="全部收进仓库" @click="collectAll">
+      <button class="pending-stars" title="全部收进仓库" :disabled="collecting" @click="collectAll">
         <span v-for="n in state.pending" :key="n" class="pending-star">⭐</span>
       </button>
     </div>
@@ -251,8 +251,13 @@ const fetchState = async () => {
   }
 }
 
-// 不传 count —— 后端收到就是把待入库的全部收走
+// 不传 count —— 后端收到就是把待入库的全部收走。
+// 「全部」是按后端当下读到的待入库算的，所以并发点两下会各收一遍，
+// 后端那把锁是主力，这里只是别让手指头把请求打出去。
+const collecting = ref(false)
 const collectAll = async () => {
+  if (collecting.value) return
+  collecting.value = true
   try {
     const res = await starlightApi.collect(userStore.userId)
     if (res.code === 0) {
@@ -262,6 +267,8 @@ const collectAll = async () => {
     }
   } catch (error) {
     alert('入库失败')
+  } finally {
+    collecting.value = false
   }
 }
 
@@ -466,6 +473,22 @@ onMounted(fetchState)
 
 .pending-stars:active {
   transform: scale(0.99);
+}
+
+/* 收取请求在飞的时候：别让 hover 效果骗人，看起来还能点 */
+.pending-stars:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.pending-stars:disabled:hover {
+  border-color: rgba(255, 215, 0, 0.35);
+  background: rgba(255, 215, 0, 0.05);
+  box-shadow: none;
+}
+
+.pending-stars:disabled:hover .pending-star {
+  transform: none;
 }
 
 .pending-star {
