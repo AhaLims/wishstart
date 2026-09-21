@@ -13,7 +13,7 @@ function getPeriod(now = new Date()) {
 
 // task: hgetall 返回的任务对象（字符串字段）
 // options.dateKey: 每日记录键使用的日期（手动完成传 UTC 日期保持原行为；时间型任务传北京时间日期）
-// options.category: 'task' | 'time_task'
+// options.category: 'task' | 'time_task' —— 调用方来源（手动完成按钮 / 工时自动结算），只用来标记流水来源
 async function applyTaskCompletion(store, task, options = {}) {
   const { now = new Date(), dateKey, category = 'task' } = options;
   const userId = task.user_id;
@@ -21,7 +21,12 @@ async function applyTaskCompletion(store, task, options = {}) {
   const utcDate = now.toISOString().split('T')[0];
   const recordDate = dateKey || utcDate;
 
-  const { ensureToday } = require('./dailyState');
+  // 「是不是时间型」看任务自己的类型，不看是谁调用的。
+  // 网页端没有计时器，时间型任务只能靠手动完成按钮，按调用方判断的话
+  // 网页端的时间型星星永远算不进掷骰子次数。
+  const isTimeTask = task.task_type === 'time';
+
+  const { ensureToday, diceEarnedFrom } = require('./dailyState');
   await ensureToday(store, userId, utcDate);
 
   let starsEarned = parseInt(task.stars_per_complete);
@@ -29,13 +34,21 @@ async function applyTaskCompletion(store, task, options = {}) {
   const isWeekend = now.getDay() === 0 || now.getDay() === 6;
   if (isWeekend) starsEarned *= 2;
 
-  await store.hincrby(`wishstar:user:${userId}`, 'current_stars', starsEarned);
-  await store.hincrby(`wishstar:user:${userId}`, 'total_stars', starsEarned);
-  const newTodayStars = await store.hincrby(`wishstar:user:${userId}`, 'today_stars', starsEarned);
+  const userKey = `wishstar:user:${userId}`;
 
-  // 每获得 5 颗星星获得 1 次掷骰子次数（按今日累计计算）
-  const totalDiceCanGet = Math.floor(newTodayStars / 5);
-  const earnedDiceCount = parseInt(await store.hget(`wishstar:user:${userId}`, 'earned_dice_count')) || 0;
+  await store.hincrby(userKey, 'current_stars', starsEarned);
+  await store.hincrby(userKey, 'total_stars', starsEarned);
+  await store.hincrby(userKey, 'today_stars', starsEarned);
+
+  // 掷骰子次数只跟「时间型」得来的星星挂钩。通用型任务点一下就有一颗星，
+  // 拿它换骰子等于可以无限刷，所以单独记一份 today_time_stars。
+  if (isTimeTask) {
+    await store.hincrby(userKey, 'today_time_stars', starsEarned);
+  }
+
+  // 时间型星星每满 5 颗获得 1 次掷骰子次数（按今日累计计算）
+  const totalDiceCanGet = diceEarnedFrom(await store.hget(userKey, 'today_time_stars'));
+  const earnedDiceCount = parseInt(await store.hget(userKey, 'earned_dice_count')) || 0;
   const diceCountToAdd = totalDiceCanGet - earnedDiceCount;
   if (diceCountToAdd > 0) {
     await store.hincrby(`wishstar:user:${userId}`, 'today_dice_count', diceCountToAdd);
@@ -74,7 +87,7 @@ async function applyTaskCompletion(store, task, options = {}) {
     task_id: task.id,
     task_name: task.name,
     stars: starsEarned,
-    type: category === 'time_task' ? 'time_task' : 'task',
+    type: isTimeTask ? 'time_task' : 'task',
     period: getPeriod(now),
     is_weekend_double: isWeekend,
     rewards: rewards.join(','),
@@ -88,7 +101,7 @@ async function applyTaskCompletion(store, task, options = {}) {
     type: 'income',
     category,
     amount: starsEarned,
-    description: `${category === 'time_task' ? '工作结算' : '完成任务'}「${task.name}」获得${starsEarned}颗星星${isWeekend ? '（周末加倍）' : ''}`,
+    description: `${isTimeTask ? '工作结算' : '完成任务'}「${task.name}」获得${starsEarned}颗星星${isWeekend ? '（周末加倍）' : ''}`,
     created_at: timestamp
   };
   await store.zadd(`wishstar:logs:${userId}`, timestamp, JSON.stringify(log));

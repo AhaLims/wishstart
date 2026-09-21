@@ -44,6 +44,8 @@
           <div class="record-task">{{ record.task_name }}</div>
           <div class="record-meta">
             <span class="record-period">{{ getPeriodText(record.period) }}</span>
+            <!-- 只有时间型的星星能换掷骰子次数，标出来才看得出为什么次数没涨 -->
+            <span v-if="isTimeRecord(record)" class="time-tag">⏱ 时间型</span>
             <span v-if="record.is_weekend_double" class="weekend-tag">周末加倍</span>
           </div>
         </div>
@@ -95,6 +97,8 @@ const changeDate = (delta) => {
   selectedDate.value = date.toISOString().split('T')[0]
   fetchRecords()
 }
+
+const isTimeRecord = (record) => record.type === 'time_task' || record.type === 'quick_time'
 
 const getPeriodText = (period) => {
   const map = {
@@ -210,6 +214,10 @@ onMounted(() => {
 
 .weekend-tag {
   color: #FFD700;
+}
+
+.time-tag {
+  color: #7FB2FF;
 }
 
 .record-actions {

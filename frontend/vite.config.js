@@ -14,6 +14,11 @@ export default defineConfig({
       '/uploads': {
         target: 'http://localhost:3000',
         changeOrigin: true
+      },
+      // 精灵头像（星光值抽奖用）也是后端托管的
+      '/spirits': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
       }
     }
   }

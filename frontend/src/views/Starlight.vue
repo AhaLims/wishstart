@@ -61,13 +61,57 @@
       </p>
     </div>
 
-    <!-- 完成任务的提示 -->
-    <div v-if="flash" class="flash card">
-      <span class="flash-text">{{ flash }}</span>
+    <!-- 抽到精灵的结果卡：不挡操作，几秒后自己淡出 -->
+    <div v-if="result" class="card result-card" :class="{ 'result-error': result.error }">
+      <template v-if="result.error">
+        <span class="result-error-text">{{ result.error }}</span>
+      </template>
+      <template v-else>
+        <div class="result-title">抽到精灵啦</div>
+        <div class="result-body">
+          <div class="result-thumb">
+            <img v-if="!broken[result.spirit.number]" :src="result.spirit.headUrl"
+                 :alt="result.spirit.name" @error="markBroken(result.spirit.number)" />
+            <span v-else class="sprite-placeholder">🔮</span>
+          </div>
+          <div class="result-info">
+            <div class="result-name">{{ result.spirit.name }}</div>
+            <div class="result-star number">+{{ result.earned }} <span class="result-unit">星光值</span></div>
+            <div class="result-no">No.{{ result.spirit.number }}</div>
+          </div>
+        </div>
+        <p v-if="result.condensedNow > 0" class="result-condense">
+          这一下刚好够档位，自动凝结出 {{ result.condensedNow }} 颗许愿星（消耗 {{ result.spentNow }} 星光值）
+        </p>
+      </template>
+    </div>
+
+    <!-- 今日抽到的精灵 -->
+    <div class="section-head">
+      <h2 class="section-title">今日抽到的精灵</h2>
+      <span class="pool-note">还剩 {{ state.poolRemaining }} 只没抽到</span>
+    </div>
+
+    <div v-if="state.todayDraws.length" class="sprite-grid">
+      <div v-for="sprite in state.todayDraws" :key="sprite.number" class="sprite-card">
+        <div class="sprite-thumb">
+          <img v-if="!broken[sprite.number]" :src="sprite.headUrl"
+               :alt="sprite.name" @error="markBroken(sprite.number)" />
+          <span v-else class="sprite-placeholder">🔮</span>
+          <span class="sprite-no">{{ sprite.number }}</span>
+        </div>
+        <div class="sprite-name">{{ sprite.name }}</div>
+        <div class="sprite-star number">★ {{ sprite.star }}</div>
+      </div>
+    </div>
+
+    <div v-else class="card empty-state sprite-empty">
+      <div class="empty-state-icon">🔍</div>
+      <p>今天还没抽到精灵，完成一次星光值任务试试</p>
     </div>
 
     <!-- 星光值任务 -->
-    <div class="section-head">
+    <div class="section-head tasks-head">
       <h2 class="section-title">星光值任务</h2>
       <button class="btn btn-primary btn-sm" @click="openCreate">+ 新建任务</button>
     </div>
@@ -77,7 +121,7 @@
         <div class="task-main">
           <div class="task-name">{{ task.name }}</div>
           <div class="task-meta">
-            每次随机 <b class="number">{{ task.min_value }} ~ {{ task.max_value }}</b> 星光值 ·
+            完成一次抽一只精灵 ·
             已完成 <b class="number">{{ task.complete_count }}</b> 次
           </div>
         </div>
@@ -128,14 +172,10 @@
           <input v-model="form.name" class="input" placeholder="比如：开始任务" @keyup.enter="save" />
         </div>
 
-        <div class="form-group">
-          <label class="label">每次完成的星光值范围（含两端，每个数概率相同）</label>
-          <div class="range-row">
-            <input v-model="form.minValue" type="number" class="input" placeholder="最小值" />
-            <span class="range-dash">~</span>
-            <input v-model="form.maxValue" type="number" class="input" placeholder="最大值" />
-          </div>
-        </div>
+        <p class="form-hint">
+          完成一次就从今天的精灵池里随机抽一只还没抽到过的精灵，
+          这只精灵值多少星光值就加多少。
+        </p>
 
         <p v-if="formError" class="form-error">{{ formError }}</p>
 
@@ -166,16 +206,25 @@ const emptyState = {
   nextCost: null,
   nextRemaining: null,
   tasks: [],
-  logs: []
+  logs: [],
+  todayDraws: [],
+  poolRemaining: 0
 }
 
 const state = ref({ ...emptyState })
-const flash = ref('')
-let flashTimer = null
+// 抽到精灵的结果卡（或「今天抽完了」这类提示），几秒后自己消失
+const result = ref(null)
+let resultTimer = null
+
+// 头像加载失败（图还没拷全）就换成占位符，不显示破图
+const broken = ref({})
+const markBroken = (number) => {
+  broken.value = { ...broken.value, [number]: true }
+}
 
 const showModal = ref(false)
 const editingId = ref('')
-const form = ref({ name: '', minValue: 1, maxValue: 50 })
+const form = ref({ name: '' })
 const formError = ref('')
 
 const progressPercent = computed(() => {
@@ -211,18 +260,14 @@ const collectAll = async () => {
 
 const openCreate = () => {
   editingId.value = ''
-  form.value = { name: '', minValue: 1, maxValue: 50 }
+  form.value = { name: '' }
   formError.value = ''
   showModal.value = true
 }
 
 const openEdit = (task) => {
   editingId.value = task.id
-  form.value = {
-    name: task.name,
-    minValue: parseInt(task.min_value),
-    maxValue: parseInt(task.max_value)
-  }
+  form.value = { name: task.name }
   formError.value = ''
   showModal.value = true
 }
@@ -234,15 +279,6 @@ const closeModal = () => {
 // 前端也校验一遍，省得为一个手滑的输入跑一趟后端
 const validateForm = () => {
   if (!form.value.name.trim()) return '任务名称不能为空'
-
-  const min = Number(form.value.minValue)
-  const max = Number(form.value.maxValue)
-
-  if (form.value.minValue === '' || form.value.maxValue === '') return '星光值范围要填完整'
-  if (!Number.isInteger(min) || !Number.isInteger(max)) return '星光值范围只能填整数'
-  if (min < 0) return '星光值不能是负数'
-  if (min > max) return '最小值不能大于最大值'
-
   return ''
 }
 
@@ -253,11 +289,7 @@ const save = async () => {
     return
   }
 
-  const payload = {
-    name: form.value.name.trim(),
-    minValue: Number(form.value.minValue),
-    maxValue: Number(form.value.maxValue)
-  }
+  const payload = { name: form.value.name.trim() }
 
   try {
     const res = editingId.value
@@ -288,29 +320,34 @@ const removeTask = async (task) => {
   }
 }
 
+// 结果卡几秒后自己淡出，连续点「完成」不会被挡住
+const showResult = (payload) => {
+  result.value = payload
+  clearTimeout(resultTimer)
+  resultTimer = setTimeout(() => {
+    result.value = null
+  }, 6000)
+}
+
 const completeTask = async (task) => {
   try {
     const res = await starlightApi.completeTask(task.id)
 
     if (res.code === 0) {
       state.value = { ...state.value, ...res.data.state }
-
-      let message = `「${task.name}」抽到 ${res.data.rolled} 星光值`
-      // 这一下刚好够档位，凝结是当次就发生的，得说一声，不然星星是哪儿来的会看不懂
-      if (res.data.state.condensedNow > 0) {
-        message += `，自动凝结出 ${res.data.state.condensedNow} 颗许愿星（消耗 ${res.data.state.spentNow} 星光值）`
-      }
-      flash.value = message
-
-      clearTimeout(flashTimer)
-      flashTimer = setTimeout(() => {
-        flash.value = ''
-      }, 6000)
+      showResult({
+        spirit: res.data.spirit,
+        earned: res.data.earned,
+        // 这一下刚好够档位，凝结是当次就发生的，得说一声，不然星星是哪儿来的会看不懂
+        condensedNow: res.data.state.condensedNow,
+        spentNow: res.data.state.spentNow
+      })
     } else {
-      alert(res.message || '完成失败')
+      // 「今天的精灵都抽完了」也走这里，用同一块地方提示，不弹 alert 打断
+      showResult({ error: res.message || '完成失败' })
     }
   } catch (error) {
-    alert('完成失败')
+    showResult({ error: '完成失败' })
   }
 }
 
@@ -480,15 +517,155 @@ onMounted(fetchState)
   color: rgba(255, 255, 255, 0.35);
 }
 
-.flash {
+/* 抽到精灵的结果卡 */
+.result-card {
   margin-bottom: 1.5rem;
   border-color: rgba(46, 204, 113, 0.4);
   animation: fadeIn 0.3s ease;
 }
 
-.flash-text {
+.result-card.result-error {
+  border-color: rgba(231, 76, 60, 0.4);
+}
+
+.result-error-text {
+  color: #E74C3C;
+  font-weight: 600;
+}
+
+.result-title {
+  font-size: 0.85rem;
   color: #2ECC71;
   font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+
+.result-body {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.result-thumb {
+  width: 84px;
+  height: 84px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 215, 0, 0.25);
+}
+
+.result-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.result-name {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.result-star {
+  font-size: 1.35rem;
+  color: #7FB2FF;
+}
+
+.result-unit {
+  font-size: 0.85rem;
+  color: #B0B0B0;
+}
+
+.result-no {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.result-condense {
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(74, 144, 217, 0.1);
+  font-size: 0.85rem;
+  color: #FFD700;
+}
+
+/* 今日抽到的精灵：小卡片平铺 */
+.sprite-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 2rem;
+}
+
+.sprite-card {
+  background: rgba(22, 33, 62, 0.8);
+  border: 1px solid rgba(74, 144, 217, 0.2);
+  border-radius: 12px;
+  padding: 0.6rem;
+  text-align: center;
+}
+
+.sprite-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sprite-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.sprite-placeholder {
+  font-size: 2rem;
+  opacity: 0.5;
+}
+
+.sprite-no {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(26, 26, 46, 0.9);
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sprite-name {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.sprite-star {
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+  color: #FFD700;
+}
+
+.sprite-empty {
+  margin-bottom: 2rem;
+}
+
+.pool-note {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.tasks-head {
+  margin-top: 0.5rem;
 }
 
 .section-head {
@@ -547,14 +724,11 @@ onMounted(fetchState)
   gap: 0.5rem;
 }
 
-.range-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.range-dash {
-  color: #B0B0B0;
+.form-hint {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.5;
+  margin-bottom: 0.5rem;
 }
 
 .form-error {

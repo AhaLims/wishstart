@@ -7,11 +7,14 @@
 //    档位只看「当天第几颗」，每天重置，所以昨天没入库的星星不会拖累今天的档位。
 // 3. 凝结出来的星星先躺在「待入库」区，玩家点一下才算进「凝结许愿星总数」。
 //
+// 星光值怎么来的：完成星光值任务 = 从当天的精灵池里抽一只**还没抽到过的**精灵
+// （不放回），把这只精灵的星光值加进来。精灵数据见 services/spirits.js。
+//
 // 这套数字跟 current_stars / total_stars 完全无关，流水也单独记一份，
 // 不要把它接到统计页那份星星流水上。
 const { v4: uuidv4 } = require('uuid');
-const crypto = require('crypto');
 const { getBeijingDate } = require('./beijingDate');
+const { drawSpirit, headUrlFor, countRemaining } = require('./spirits');
 
 // 当天第 N 颗许愿星需要多少星光值。数组下标 0 就是「当天第 1 颗」。
 //   第 1-5 颗：每颗 80
@@ -30,13 +33,14 @@ const STAR_COSTS = [
 // 一天最多凝结 25 颗
 const MAX_DAILY_STARS = STAR_COSTS.length;
 
-// 星光值任务的范围上限。够大了，同时也把 crypto.randomInt 卡在它的合法区间内。
-const MAX_SPAN = 2 ** 32;
-
 const stateKey = (userId) => `wishstar:starlight:${userId}`;
 const taskKey = (taskId) => `wishstar:starlight_task:${taskId}`;
 const taskIndexKey = (userId) => `wishstar:starlight_tasks:${userId}`;
 const logKey = (userId) => `wishstar:starlight_logs:${userId}`;
+
+// 当天抽到过的精灵（zset）。一张表两个用途：
+// 既是「不放回」的排除集，也是页面上那排「今日抽到的精灵」小卡片。
+const drawsKey = (userId, date) => `wishstar:starlight_draws:${userId}:${date}`;
 
 // 当天第 n 颗（n 从 1 开始）需要多少星光值；超出 25 颗返回 null
 function costOfStar(n) {
@@ -44,28 +48,25 @@ function costOfStar(n) {
   return STAR_COSTS[n - 1];
 }
 
-// 取一个 [min, max] 的均匀随机整数，两端都能抽到。
-// crypto.randomInt 内部就是拒绝采样，不会出现取模偏置。
-function rollInRange(min, max) {
-  return crypto.randomInt(min, max + 1);
-}
-
-// 校验任务范围：整数、非负、min <= max、跨度不过大
-function validateRange(minValue, maxValue) {
-  if (!Number.isInteger(minValue) || !Number.isInteger(maxValue)) {
-    return '星光值范围只能填整数';
-  }
-  if (minValue < 0) return '星光值不能是负数';
-  if (minValue > maxValue) return '最小值不能大于最大值';
-  if (maxValue - minValue + 1 > MAX_SPAN) return '范围太大，跨度最多 2^32';
-  return null;
-}
-
 // 记一条星光值流水（zset，与星星流水分开存）
 async function addLog(store, userId, entry) {
   const log = { id: uuidv4(), created_at: Date.now(), ...entry };
   await store.zadd(logKey(userId), log.created_at, JSON.stringify(log));
   return log;
+}
+
+// 当天抽到过的精灵，按抽到的先后排（zset 按时间戳升序）
+async function loadDraws(store, userId, date) {
+  const raw = await store.zrange(drawsKey(userId, date), 0, -1);
+  const draws = [];
+  for (const item of raw) {
+    try {
+      draws.push(JSON.parse(item));
+    } catch (e) {
+      // 坏数据跳过，不影响页面
+    }
+  }
+  return draws;
 }
 
 // 读状态 + 跨天重置 + 自动凝结。所有星光值接口进来都先跑这个。
@@ -154,21 +155,38 @@ async function ensureStarlight(store, userId, now = new Date()) {
   };
 }
 
-// 完成一次星光值任务：roll 一个数，累加到当日星光值，然后跑一遍自动凝结
+// 完成一次星光值任务：从当天还没抽到过的精灵里抽一只，把它的星光值加进来，
+// 然后跑一遍自动凝结。
+//
+// 抽不到精灵时返回 { error }，调用方原样把 message 给前端。
 async function completeStarlightTask(store, task, now = new Date()) {
   const userId = task.user_id;
-  const min = parseInt(task.min_value);
-  const max = parseInt(task.max_value);
-
-  const rolled = rollInRange(min, max);
+  const date = getBeijingDate(now);
 
   // 先 ensure 一次，让跨天重置（如果有）在加数之前发生——
   // 否则刚加上的星光值会被紧接着的每日清零抹掉
   await ensureStarlight(store, userId, now);
 
-  // 再加星光值，然后第二次 ensure 把够档位的当次凝结掉
-  await store.hincrby(stateKey(userId), 'value', rolled);
-  await store.hincrby(stateKey(userId), 'today_earned', rolled);
+  // 不放回：把今天已经抽到过的编号排除掉
+  const drawn = await loadDraws(store, userId, date);
+  const spirit = drawSpirit(new Set(drawn.map((d) => d.number)));
+  if (!spirit) {
+    return { error: '今天的精灵都抽完了，明天再来吧' };
+  }
+
+  const earned = spirit.star;
+
+  await store.hincrby(stateKey(userId), 'value', earned);
+  await store.hincrby(stateKey(userId), 'today_earned', earned);
+
+  const draw = {
+    number: spirit.number,
+    name: spirit.name,
+    star: earned,
+    headUrl: headUrlFor(spirit),
+    at: now.getTime()
+  };
+  await store.zadd(drawsKey(userId, date), draw.at, JSON.stringify(draw));
 
   const newComplete = (parseInt(task.complete_count) || 0) + 1;
   await store.hset(taskKey(task.id), {
@@ -179,13 +197,13 @@ async function completeStarlightTask(store, task, now = new Date()) {
   await addLog(store, userId, {
     type: 'income',
     category: 'starlight_task',
-    amount: rolled,
+    amount: earned,
     unit: '星光值',
-    description: `完成「${task.name}」获得 ${rolled} 星光值`
+    description: `抽到「${spirit.name}」获得 ${earned} 星光值`
   });
 
   const state = await ensureStarlight(store, userId, now);
-  return { rolled, state, completeCount: newComplete };
+  return { spirit: draw, earned, state, completeCount: newComplete };
 }
 
 // 入库：把待入库的许愿星收进「凝结许愿星总数」
@@ -222,15 +240,14 @@ async function collectStars(store, userId, count, now = new Date()) {
 module.exports = {
   STAR_COSTS,
   MAX_DAILY_STARS,
-  MAX_SPAN,
   stateKey,
   taskKey,
   taskIndexKey,
   logKey,
+  drawsKey,
   costOfStar,
-  rollInRange,
-  validateRange,
   addLog,
+  loadDraws,
   ensureStarlight,
   completeStarlightTask,
   collectStars

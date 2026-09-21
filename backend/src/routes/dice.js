@@ -57,6 +57,7 @@ router.post('/', async (req, res) => {
     const newCurrentStars = await req.redis.hget(`wishstar:user:${userId}`, 'current_stars');
     const newTodayDiceCount = await req.redis.hget(`wishstar:user:${userId}`, 'today_dice_count');
     const newTodayStars = await req.redis.hget(`wishstar:user:${userId}`, 'today_stars');
+    const newTodayTimeStars = await req.redis.hget(`wishstar:user:${userId}`, 'today_time_stars');
 
     res.json({
       code: 0,
@@ -65,7 +66,8 @@ router.post('/', async (req, res) => {
         starsEarned,
         currentStars: parseInt(newCurrentStars),
         remainingDiceCount: parseInt(newTodayDiceCount) || 0,
-        todayStars: parseInt(newTodayStars) || 0
+        todayStars: parseInt(newTodayStars) || 0,
+        todayTimeStars: parseInt(newTodayTimeStars) || 0
       }
     });
   } catch (error) {
@@ -131,6 +133,7 @@ router.post('/manual', async (req, res) => {
     const newCurrentStars = await req.redis.hget(`wishstar:user:${userId}`, 'current_stars');
     const newTodayDiceCount = await req.redis.hget(`wishstar:user:${userId}`, 'today_dice_count');
     const newTodayStars = await req.redis.hget(`wishstar:user:${userId}`, 'today_stars');
+    const newTodayTimeStars = await req.redis.hget(`wishstar:user:${userId}`, 'today_time_stars');
 
     res.json({
       code: 0,
@@ -139,7 +142,8 @@ router.post('/manual', async (req, res) => {
         starsEarned,
         currentStars: parseInt(newCurrentStars),
         remainingDiceCount: parseInt(newTodayDiceCount) || 0,
-        todayStars: parseInt(newTodayStars) || 0
+        todayStars: parseInt(newTodayStars) || 0,
+        todayTimeStars: parseInt(newTodayTimeStars) || 0
       }
     });
   } catch (error) {
@@ -165,6 +169,8 @@ router.get('/', async (req, res) => {
     const todayDiceCount = await req.redis.hget(`wishstar:user:${userId}`, 'today_dice_count');
     const currentStars = await req.redis.hget(`wishstar:user:${userId}`, 'current_stars');
     const todayStars = await req.redis.hget(`wishstar:user:${userId}`, 'today_stars');
+    // 掷骰子次数按「时间型」星星算，通用型的不算
+    const todayTimeStars = await req.redis.hget(`wishstar:user:${userId}`, 'today_time_stars');
     const count = parseInt(todayDiceCount) || 0;
     const stars = parseInt(currentStars) || 0;
     const todayStarsCount = parseInt(todayStars) || 0;
@@ -175,7 +181,8 @@ router.get('/', async (req, res) => {
         canRoll: count > 0,
         diceCount: count,
         currentStars: stars,
-        todayStars: todayStarsCount
+        todayStars: todayStarsCount,
+        todayTimeStars: parseInt(todayTimeStars) || 0
       }
     });
   } catch (error) {

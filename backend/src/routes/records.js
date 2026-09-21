@@ -1,16 +1,19 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { ensureToday } = require('../services/dailyState');
+const { ensureToday, isTimeRecord, diceEarnedFrom } = require('../services/dailyState');
 
 // 快速记录（单次任务）
+// recordType: 'time' 时间型 | 'general' 通用型（不传按通用型）
 router.post('/quick', async (req, res) => {
   try {
-    const { userId, taskName, stars } = req.body;
+    const { userId, taskName, stars, recordType } = req.body;
 
     if (!userId || !taskName || !stars) {
       return res.status(400).json({ code: 1, message: '缺少必要参数' });
     }
+
+    const isTime = recordType === 'time';
 
     const now = new Date();
     const date = now.toISOString().split('T')[0];
@@ -28,18 +31,24 @@ router.post('/quick', async (req, res) => {
     await ensureToday(req.redis, userId, date);
 
     // 更新用户星星
-    await req.redis.hincrby(`wishstar:user:${userId}`, 'current_stars', starsEarned);
-    await req.redis.hincrby(`wishstar:user:${userId}`, 'total_stars', starsEarned);
-    // 记录今天获得的星星（用于判断是否能掷骰子）
-    const newTodayStars = await req.redis.hincrby(`wishstar:user:${userId}`, 'today_stars', starsEarned);
+    const userKey = `wishstar:user:${userId}`;
 
-    // 每获得5颗星星，获得1次掷骰子次数（按今日累计计算）
-    const totalDiceCanGet = Math.floor(newTodayStars / 5);
-    const earnedDiceCount = parseInt(await req.redis.hget(`wishstar:user:${userId}`, 'earned_dice_count')) || 0;
+    await req.redis.hincrby(userKey, 'current_stars', starsEarned);
+    await req.redis.hincrby(userKey, 'total_stars', starsEarned);
+    await req.redis.hincrby(userKey, 'today_stars', starsEarned);
+
+    // 掷骰子次数只认「时间型」的星星：通用型点一下就有一颗，拿它换骰子等于无限刷
+    if (isTime) {
+      await req.redis.hincrby(userKey, 'today_time_stars', starsEarned);
+    }
+
+    // 时间型星星每获得5颗，获得1次掷骰子次数（按今日累计计算）
+    const totalDiceCanGet = diceEarnedFrom(await req.redis.hget(userKey, 'today_time_stars'));
+    const earnedDiceCount = parseInt(await req.redis.hget(userKey, 'earned_dice_count')) || 0;
     const diceCountToAdd = totalDiceCanGet - earnedDiceCount;
     if (diceCountToAdd > 0) {
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'today_dice_count', diceCountToAdd);
-      await req.redis.hincrby(`wishstar:user:${userId}`, 'earned_dice_count', diceCountToAdd);
+      await req.redis.hincrby(userKey, 'today_dice_count', diceCountToAdd);
+      await req.redis.hincrby(userKey, 'earned_dice_count', diceCountToAdd);
     }
 
     // 记录到每日记录（使用北京时间）
@@ -53,7 +62,7 @@ router.post('/quick', async (req, res) => {
       task_id: '',
       task_name: taskName,
       stars: starsEarned,
-      type: 'quick',
+      type: isTime ? 'quick_time' : 'quick',
       period,
       is_weekend_double: isWeekend,
       created_at: timestamp
@@ -161,9 +170,16 @@ router.delete('/:recordId', async (req, res) => {
           const newTodayStars = Math.max(0, todayStars - record.stars);
           await req.redis.hset(userKey, 'today_stars', newTodayStars.toString());
 
-          // 按回滚后的今日星星重新计算应得的骰子次数
+          // 时间型的记录才回滚今日时间型星星 —— 骰子次数是按它算的
+          if (isTimeRecord(record)) {
+            const timeStars = parseInt(await req.redis.hget(userKey, 'today_time_stars')) || 0;
+            const newTimeStars = Math.max(0, timeStars - record.stars);
+            await req.redis.hset(userKey, 'today_time_stars', newTimeStars.toString());
+          }
+
+          // 按回滚后的今日时间型星星重新计算应得的骰子次数
           const oldEarnedDiceCount = parseInt(await req.redis.hget(userKey, 'earned_dice_count')) || 0;
-          const newEarnedDiceCount = Math.floor(newTodayStars / 5);
+          const newEarnedDiceCount = diceEarnedFrom(await req.redis.hget(userKey, 'today_time_stars'));
           await req.redis.hset(userKey, 'earned_dice_count', newEarnedDiceCount.toString());
 
           // 扣减剩余骰子次数：已用掉的不追回，保证不为负数

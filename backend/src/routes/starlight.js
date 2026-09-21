@@ -8,13 +8,15 @@ const {
   taskKey,
   taskIndexKey,
   logKey,
-  validateRange,
+  loadDraws,
   ensureStarlight,
   completeStarlightTask,
   collectStars
 } = require('../services/starlight');
+const { countRemaining } = require('../services/spirits');
 
-// 组装一份完整状态：当前星光值 + 待入库 + 已入库 + 任务列表 + 流水
+// 组装一份完整状态：
+// 当前星光值 + 待入库 + 已入库 + 今日抽到的精灵 + 任务列表 + 流水
 async function buildState(store, userId) {
   const state = await ensureStarlight(store, userId);
 
@@ -30,7 +32,18 @@ async function buildState(store, userId) {
   const rawLogs = await store.zrevrange(logKey(userId), 0, 49);
   const logs = rawLogs.map((l) => JSON.parse(l));
 
-  return { ...state, tasks, logs, maxDailyStars: MAX_DAILY_STARS };
+  // 今日抽到的精灵（抽到的先后顺序），以及池子里还剩多少只没抽到
+  const todayDraws = await loadDraws(store, userId, state.date);
+  const poolRemaining = countRemaining(new Set(todayDraws.map((d) => d.number)));
+
+  return {
+    ...state,
+    tasks,
+    logs,
+    maxDailyStars: MAX_DAILY_STARS,
+    todayDraws,
+    poolRemaining
+  };
 }
 
 // 获取星光值状态（含任务列表和流水）
@@ -47,23 +60,16 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 创建星光值任务
+// 创建星光值任务（只需要名称，星光值来自抽到的精灵）
 router.post('/tasks', async (req, res) => {
   try {
-    const { userId, name, minValue, maxValue } = req.body;
+    const { userId, name } = req.body;
 
     if (!userId) {
       return res.status(400).json({ code: 1, message: '缺少userId参数' });
     }
     if (!name || !String(name).trim()) {
       return res.json({ code: 1, message: '任务名称不能为空' });
-    }
-
-    const min = Number(minValue);
-    const max = Number(maxValue);
-    const rangeError = validateRange(min, max);
-    if (rangeError) {
-      return res.json({ code: 1, message: rangeError });
     }
 
     const taskId = uuidv4();
@@ -73,8 +79,6 @@ router.post('/tasks', async (req, res) => {
       id: taskId,
       user_id: userId,
       name: String(name).trim(),
-      min_value: String(min),
-      max_value: String(max),
       complete_count: '0',
       created_at: String(now),
       updated_at: String(now)
@@ -89,11 +93,11 @@ router.post('/tasks', async (req, res) => {
   }
 });
 
-// 修改星光值任务（名称 / 范围）
+// 修改星光值任务（只能改名）
 router.put('/tasks/:taskId', async (req, res) => {
   try {
     const { taskId } = req.params;
-    const { name, minValue, maxValue } = req.body;
+    const { name } = req.body;
 
     const task = await req.redis.hgetall(taskKey(taskId));
     if (!task || !task.id) {
@@ -107,18 +111,6 @@ router.put('/tasks/:taskId', async (req, res) => {
         return res.json({ code: 1, message: '任务名称不能为空' });
       }
       updates.name = String(name).trim();
-    }
-
-    // 范围要么都不改，要么两个一起给，免得出现 min > max 的中间态
-    if (minValue !== undefined || maxValue !== undefined) {
-      const min = minValue !== undefined ? Number(minValue) : parseInt(task.min_value);
-      const max = maxValue !== undefined ? Number(maxValue) : parseInt(task.max_value);
-      const rangeError = validateRange(min, max);
-      if (rangeError) {
-        return res.json({ code: 1, message: rangeError });
-      }
-      updates.min_value = String(min);
-      updates.max_value = String(max);
     }
 
     await req.redis.hset(taskKey(taskId), updates);
@@ -146,7 +138,7 @@ router.delete('/tasks/:taskId', async (req, res) => {
   }
 });
 
-// 完成一次星光值任务：roll 一个数累加到当日星光值
+// 完成一次星光值任务：抽一只今天还没抽到过的精灵，把它的星光值加进来
 router.post('/tasks/:taskId/complete', async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -157,15 +149,20 @@ router.post('/tasks/:taskId/complete', async (req, res) => {
     }
 
     const result = await completeStarlightTask(req.redis, task);
+    // 当天精灵抽完了：不是错误，就是没得抽了，提示一下
+    if (result.error) {
+      return res.json({ code: 1, message: result.error });
+    }
 
-    // 回完整状态（含任务列表和流水），不然前端拿到的 tasks/logs 还是旧的，
-    // 完成次数和刚产生的流水要刷新页面才会更新
+    // 回完整状态（含任务列表、流水、今日精灵），不然前端拿到的还是旧的，
+    // 完成次数和刚抽到的精灵要刷新页面才会更新
     const state = await buildState(req.redis, task.user_id);
 
     res.json({
       code: 0,
       data: {
-        rolled: result.rolled,
+        spirit: result.spirit,
+        earned: result.earned,
         state: {
           ...state,
           // 这两个只跟「这一次」有关，不入库，只在响应里带出去

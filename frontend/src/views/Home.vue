@@ -68,6 +68,19 @@
           <label class="label">获得星星</label>
           <input v-model.number="quickStars" type="number" class="input" placeholder="输入星星数量" />
         </div>
+        <div class="form-group">
+          <label class="label">任务类型</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" value="general" v-model="quickType" />
+              ✅ 通用型
+            </label>
+            <label class="radio-label">
+              <input type="radio" value="time" v-model="quickType" />
+              ⏱ 时间型（星星计入掷骰子次数）
+            </label>
+          </div>
+        </div>
         <div class="modal-actions">
           <button class="btn btn-primary" @click="submitQuickRecord">提交</button>
           <button class="btn" @click="showQuickRecord = false">取消</button>
@@ -87,6 +100,8 @@ const userStore = useUserStore()
 const showQuickRecord = ref(false)
 const quickTaskName = ref('')
 const quickStars = ref(5)
+// 只有时间型的星星能换掷骰子次数，所以快速记录也得说清楚是哪一型
+const quickType = ref('general')
 
 const stats = computed(() => userStore.stats)
 const workSeconds = ref(0)
@@ -124,13 +139,15 @@ const submitQuickRecord = async () => {
     const res = await recordApi.quickRecord({
       userId: userStore.userId,
       taskName: quickTaskName.value,
-      stars: quickStars.value
+      stars: quickStars.value,
+      recordType: quickType.value
     })
 
     if (res.code === 0) {
       showQuickRecord.value = false
       quickTaskName.value = ''
       quickStars.value = 5
+      quickType.value = 'general'
       await userStore.fetchStats()
     } else {
       alert(res.message || '记录失败')
@@ -233,6 +250,20 @@ const submitQuickRecord = async () => {
   display: flex;
   gap: 1rem;
   margin-top: 1.5rem;
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.9rem;
 }
 
 @media (max-width: 768px) {

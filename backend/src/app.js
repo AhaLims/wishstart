@@ -13,6 +13,7 @@ const workRoutes = require('./routes/work');
 const starlightRoutes = require('./routes/starlight');
 const syncRoutes = require('./routes/sync');
 const { setUploadsDir, getUploadsDir } = require('./services/wishImage');
+const { HEADS_URL_PREFIX, getHeadsDir } = require('./services/spirits');
 
 function createApp({ store, serveStatic, staticDir, uploadsDir }) {
   const app = express();
@@ -34,6 +35,10 @@ function createApp({ store, serveStatic, staticDir, uploadsDir }) {
   // 愿望配图。文件名是内容哈希，内容永远不会变，可以放心长缓存。
   // 开发模式下前端跑在 Vite(5173)，靠 vite.config.js 里的 /uploads 代理打到这里。
   app.use('/uploads', express.static(absoluteUploadsDir, { maxAge: '1y', immutable: true }));
+
+  // 精灵头像（星光值抽奖用），来自 nrc-scraper 的采集结果。
+  // 采集脚本还在跑的时候图片会一直增加，所以缓存时间给短一点。
+  app.use(HEADS_URL_PREFIX, express.static(getHeadsDir(), { maxAge: '1d' }));
 
   app.use('/api/v1/users', userRoutes);
   app.use('/api/v1/tasks', taskRoutes);
@@ -59,8 +64,9 @@ function createApp({ store, serveStatic, staticDir, uploadsDir }) {
 
     app.use(express.static(absoluteStaticDir));
     app.get('*', (req, res, next) => {
-      // /api 和 /uploads 找不到就该是 404，不能回退成 index.html
-      if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) return next();
+      // /api、/uploads、/spirits 找不到就该是 404，不能回退成 index.html
+      if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/') ||
+          req.path.startsWith(HEADS_URL_PREFIX + '/')) return next();
       res.sendFile(path.join(absoluteStaticDir, 'index.html'), (err) => {
         if (err) next();
       });

@@ -1,6 +1,10 @@
-// 统一管理“今日”相关的每日计数（today_stars / today_dice_count / earned_dice_count）
+// 统一管理“今日”相关的每日计数
+// （today_stars / today_time_stars / today_dice_count / earned_dice_count）
 // 所有会读写这些字段的接口（任务、骰子、快速记录、统计）都通过这里判断是否跨天，
 // 避免多个接口各自维护日期标记、互相把对方已经加好的计数清零。
+//
+// today_stars 是今日拿到的全部星星（记录页、首页显示用）；
+// today_time_stars 只装「时间型」得来的星星，掷骰子次数按它算。
 
 // 获取日期字符串（与项目现有逻辑一致，按 UTC 日期）
 function getToday(now = new Date()) {
@@ -11,12 +15,24 @@ function getToday(now = new Date()) {
 async function resetToday(redis, key, date) {
   await redis.hset(key, {
     today_stars: '0',
+    today_time_stars: '0',
     today_dice_count: '0',
     earned_dice_count: '0',
     last_daily_date: date,
     last_task_date: date,
     last_dice_date: date
   });
+}
+
+// 一条记录算不算「时间型」得来的。
+// 掷骰子次数只认时间型的星星，所以任务记录和快速记录都得能判出来。
+function isTimeRecord(record) {
+  return record.type === 'time_task' || record.type === 'quick_time';
+}
+
+// 时间型星星每满 5 颗换 1 次掷骰子次数
+function diceEarnedFrom(timeStars) {
+  return Math.floor((parseInt(timeStars) || 0) / 5);
 }
 
 // 确保今日状态已初始化：
@@ -54,4 +70,4 @@ async function ensureToday(redis, userId, date) {
   return false;
 }
 
-module.exports = { getToday, ensureToday };
+module.exports = { getToday, ensureToday, isTimeRecord, diceEarnedFrom };

@@ -6,18 +6,19 @@
       <p>当前星星: {{ currentStars }}</p>
       <p>掷骰子次数: {{ diceCount }}</p>
       <p>今日获得星星: {{ todayStars }}</p>
+      <p>其中时间型: {{ todayTimeStars }}</p>
     </div>
 
     <div class="dice-box">
       <div class="dice">{{ diceValue }}</div>
     </div>
 
-    <p class="hint">每获得5颗星星 = 1次掷骰子机会</p>
-    <p class="hint">今日获得5颗星星以上才能使用掷骰子次数</p>
+    <p class="hint">时间型每获得5颗星星 = 1次掷骰子机会</p>
+    <p class="hint">通用型任务的星星不计入掷骰子次数</p>
 
     <button
       class="btn-roll"
-      :disabled="diceCount <= 0 || todayStars < 5"
+      :disabled="diceCount <= 0"
       @click="rollDice"
     >
       🎲 在线掷骰子
@@ -61,6 +62,7 @@ const diceCount = ref(0)
 const diceValue = ref(1)
 const result = ref(null)
 const todayStars = ref(0)
+const todayTimeStars = ref(0)
 const manualDiceValue = ref(null)
 
 const currentStars = computed(() => userStore.stats?.currentStars || 0)
@@ -70,6 +72,7 @@ const fetchDiceStatus = async () => {
   if (res.code === 0) {
     diceCount.value = res.data.diceCount || 0
     todayStars.value = res.data.todayStars || 0
+    todayTimeStars.value = res.data.todayTimeStars || 0
   }
 }
 
