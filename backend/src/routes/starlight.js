@@ -15,6 +15,9 @@ const {
 } = require('../services/starlight');
 const { countRemaining, countTotal } = require('../services/spirits');
 
+// 页面上展示多久以内的流水。存储里不删，只是不往页面上搬。
+const STARLIGHT_LOG_DAYS = 7;
+
 // 组装一份完整状态：
 // 当前星光值 + 待入库 + 已入库 + 今日抽到的精灵 + 任务列表 + 流水
 async function buildState(store, userId) {
@@ -29,8 +32,15 @@ async function buildState(store, userId) {
   // 新建的排在前面
   tasks.sort((a, b) => (parseInt(b.created_at) || 0) - (parseInt(a.created_at) || 0));
 
+  // 流水只给页面最近 50 条、且只给 7 天内的（哪个更严就按哪个）。
+  //
+  // 存储里的流水一条都不删 —— 那是历史记录。这里只是不往页面上搬：
+  // 再往前的既翻不到也没人看，白白占一份响应体。
+  const logCutoff = Date.now() - STARLIGHT_LOG_DAYS * 24 * 3600 * 1000;
   const rawLogs = await store.zrevrange(logKey(userId), 0, 49);
-  const logs = rawLogs.map((l) => JSON.parse(l));
+  const logs = rawLogs
+    .map((l) => JSON.parse(l))
+    .filter((l) => (l && l.created_at ? l.created_at : 0) >= logCutoff);
 
   // 今日抽到的精灵（抽到的先后顺序），以及池子里还剩多少只没抽到。
   // poolTotal 是给前端分辨「今天抽完了」和「池子没加载出来」用的。

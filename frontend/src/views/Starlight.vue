@@ -156,7 +156,7 @@
         </div>
 
         <div v-if="!state.logs.length" class="empty-state">
-          <p>暂无流水记录</p>
+          <p>最近 7 天没有流水记录</p>
         </div>
       </div>
     </div>

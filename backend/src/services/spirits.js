@@ -3,8 +3,10 @@
 // 数据不在这个项目里，采集脚本在 nrc-scraper，所以路径现在是写死的绝对路径。
 // 等 data/ 和 images/ 拷进项目之后再换成相对路径（只需要改下面这一行）。
 //
-// 每次抽奖都实时读盘（靠 mtime+size 判断要不要重新解析），
-// 所以采集脚本还在跑的时候，新爬到的精灵不用重启服务就能进池子。
+// **名单在进程启动时读一次就定下来。** 精灵图鉴基本是固定的（大概两个月才
+// 更新一次），所以不值得每次抽奖都去 statSync 两下看看文件改没改 ——
+// 那是每个请求都要付的固定开销，而收益一年也兑现不了几次。
+// 采集脚本更新了数据之后要重启服务才会生效；不想重启就调 reloadSpirits()。
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -18,7 +20,8 @@ const HEADS_DIR = path.join(DATA_DIR, 'images', 'heads');
 // 前端拿头像用的 URL 前缀，跟 app.js 里挂的静态目录对应
 const HEADS_URL_PREFIX = '/spirits/heads';
 
-let cache = { key: '', spirits: [] };
+// 启动时填一次，之后一直是它（见文件头注释）
+let cache = null;
 
 function getHeadsDir() {
   return HEADS_DIR;
@@ -37,19 +40,6 @@ function headFileFor(number, name) {
 // 中文和全角括号交给 encodeURIComponent。
 function headUrlFor(spirit) {
   return `${HEADS_URL_PREFIX}/${encodeURIComponent(path.basename(headFileFor(spirit.number, spirit.name)))}`;
-}
-
-// 两个候选数据文件的 mtime + size 拼成一个 key。
-// 变了就说明采集脚本写了新东西，重新解析一遍。
-function sourceKey() {
-  return [JSONL_FILE, JSON_FILE].map((f) => {
-    try {
-      const s = fs.statSync(f);
-      return `${path.basename(f)}:${s.mtimeMs}:${s.size}`;
-    } catch (e) {
-      return `${path.basename(f)}:-`;
-    }
-  }).join('|');
 }
 
 // 把一条原始记录压成池子需要的形状；不合法返回 null（丢掉落单的行）
@@ -119,13 +109,16 @@ function readSpirits() {
   return [];
 }
 
-// 当前池子（带缓存：数据文件没变就直接复用上次解析的结果）
+// 当前池子。第一次调用才读盘（模块加载时已经调用过一次，所以正常就是直接返回）。
 function loadSpirits() {
-  const key = sourceKey();
-  if (key !== cache.key) {
-    cache = { key, spirits: readSpirits() };
-  }
-  return cache.spirits;
+  if (cache === null) cache = readSpirits();
+  return cache;
+}
+
+// 重新读一遍。采集脚本更新了名单又不想重启服务时用，平时用不到。
+function reloadSpirits() {
+  cache = readSpirits();
+  return cache;
 }
 
 // 从还没抽到过的精灵里等概率抽一只；全抽完了返回 null
@@ -146,6 +139,10 @@ function countTotal() {
   return loadSpirits().length;
 }
 
+// 模块加载时就把名单读进来 —— 这才是「启动时解析」。
+// 放在文件末尾是为了让上面所有函数都定义好。
+loadSpirits();
+
 module.exports = {
   DATA_DIR,
   HEADS_URL_PREFIX,
@@ -153,6 +150,7 @@ module.exports = {
   headFileFor,
   headUrlFor,
   loadSpirits,
+  reloadSpirits,
   drawSpirit,
   countRemaining,
   countTotal
