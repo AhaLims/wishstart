@@ -27,8 +27,10 @@
 
           <div class="task-progress">
             <template v-if="task.task_type === 'time'">
-              <span>每 {{ task.minutes_per_complete }} 分钟自动完成 1 次</span>
-              <span v-if="workProgress[task.id]">
+              <!-- 网页端没有计时器，别承诺「自动完成」，只能说这个数字是几次 -->
+              <span v-if="desktop">每 {{ task.minutes_per_complete }} 分钟自动完成 1 次</span>
+              <span v-else>每 {{ task.minutes_per_complete }} 分钟算 1 次</span>
+              <span v-if="desktop && workProgress[task.id]">
                 （今日已工作 {{ workProgress[task.id].totalMinutes }} 分钟，自动完成 {{ workProgress[task.id].earned }} 次）
               </span>
             </template>
@@ -47,7 +49,7 @@
 
         <div class="task-actions">
           <button
-            v-if="task.status !== 'finished' && task.task_type !== 'time'"
+            v-if="task.status !== 'finished' && (task.task_type !== 'time' || !desktop)"
             class="btn btn-success"
             @click="completeTask(task.id)"
           >
@@ -82,13 +84,13 @@
             </label>
             <label class="radio-label">
               <input type="radio" value="time" v-model="newTask.taskType" />
-              ⏱ 时间型（按工作分钟数自动完成）
+              ⏱ 时间型（{{ desktop ? '按工作分钟数自动完成' : '按分钟数记次数，手动完成' }}）
             </label>
           </div>
         </div>
 
         <div class="form-group" v-if="newTask.taskType === 'time'">
-          <label class="label">工作多少分钟自动完成 1 次</label>
+          <label class="label">{{ desktop ? '工作多少分钟自动完成 1 次' : '工作多少分钟算 1 次' }}</label>
           <input v-model.number="newTask.minutesPerComplete" type="number" min="1" class="input" />
         </div>
 
@@ -133,10 +135,16 @@
 import { ref, onMounted } from 'vue'
 import { useUserStore } from '../stores/user'
 import { taskApi, workApi } from '../api'
+import { isDesktop } from '../utils/env'
 
 const userStore = useUserStore()
 const tasks = ref([])
 const showAddModal = ref(false)
+
+// 时间型任务靠计时器自动结算，而计时器只有桌面端有。
+// 网页端没有这个能力，所以时间型任务在网页端必须保留手动完成按钮，
+// 文案也不能写成「自动完成」—— 否则就是个点不动的死任务。
+const desktop = isDesktop()
 
 const workProgress = ref({})
 
