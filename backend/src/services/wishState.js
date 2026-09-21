@@ -8,6 +8,9 @@
 // 避免多个接口各自判断过期、把状态写歪。
 
 const { v4: uuidv4 } = require('uuid');
+// 进程内互斥，保护「首次创建通用愿望」这类读-改-写窗口。
+// Redis 模式下的重复创建由 ensureGeneralWish 去重兜底。
+const { withLock } = require('../utils/lock');
 
 const PREFIX = 'wishstar:wish';
 const INDEX_PREFIX = 'wishstar:wishes:index';
@@ -85,27 +88,6 @@ function formatFragments(wish) {
   const current = getCurrentFragments(wish);
   if (isGeneralWish(wish)) return `${current}`;
   return `${current}/${getTotalFragments(wish)}`;
-}
-
-// ---------- 进程内互斥 ----------
-
-const locks = new Map();
-
-// 保护「首次创建通用愿望」这类读-改-写窗口。
-// 仅进程内有效，够用：json/内存存储本来就是单进程，Redis 模式下的重复创建由 ensureGeneralWish 去重兜底。
-async function withLock(key, fn) {
-  const prev = locks.get(key) || Promise.resolve();
-  let release;
-  const current = new Promise((resolve) => { release = resolve; });
-  locks.set(key, current);
-
-  await prev;
-  try {
-    return await fn();
-  } finally {
-    if (locks.get(key) === current) locks.delete(key);
-    release();
-  }
 }
 
 // ---------- IO ----------
@@ -247,7 +229,6 @@ module.exports = {
   isWishFull,
   isDrawEligible,
   formatFragments,
-  withLock,
   markWishReady,
   ensureWishFresh,
   ensureWishFreshAll,

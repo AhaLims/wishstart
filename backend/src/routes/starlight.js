@@ -13,7 +13,7 @@ const {
   completeStarlightTask,
   collectStars
 } = require('../services/starlight');
-const { countRemaining } = require('../services/spirits');
+const { countRemaining, countTotal } = require('../services/spirits');
 
 // 组装一份完整状态：
 // 当前星光值 + 待入库 + 已入库 + 今日抽到的精灵 + 任务列表 + 流水
@@ -32,7 +32,8 @@ async function buildState(store, userId) {
   const rawLogs = await store.zrevrange(logKey(userId), 0, 49);
   const logs = rawLogs.map((l) => JSON.parse(l));
 
-  // 今日抽到的精灵（抽到的先后顺序），以及池子里还剩多少只没抽到
+  // 今日抽到的精灵（抽到的先后顺序），以及池子里还剩多少只没抽到。
+  // poolTotal 是给前端分辨「今天抽完了」和「池子没加载出来」用的。
   const todayDraws = await loadDraws(store, userId, state.date);
   const poolRemaining = countRemaining(new Set(todayDraws.map((d) => d.number)));
 
@@ -42,7 +43,8 @@ async function buildState(store, userId) {
     logs,
     maxDailyStars: MAX_DAILY_STARS,
     todayDraws,
-    poolRemaining
+    poolRemaining,
+    poolTotal: countTotal()
   };
 }
 

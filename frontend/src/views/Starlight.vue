@@ -3,7 +3,7 @@
     <h1 class="page-title">星光值</h1>
     <p class="page-subtitle">星光值可凝结成许愿星</p>
 
-    <!-- 两个总览数字 -->
+    <!-- 凝结许愿星总数。当天还剩多少星光值在下面的进度条上，不单列一张卡 -->
     <div class="overview">
       <div class="card overview-card">
         <div class="overview-label">凝结许愿星总数</div>
@@ -11,12 +11,40 @@
           {{ state.banked }}<span class="overview-unit">颗</span>
         </div>
       </div>
-      <div class="card overview-card">
-        <div class="overview-label">当日星光值</div>
-        <div class="overview-value number starlight">
-          {{ state.value }}<span class="overview-unit">星光值</span>
+    </div>
+
+    <!-- 星光值任务：整页唯一要动手的地方，放在总览数字下面 -->
+    <div class="section-head tasks-head">
+      <h2 class="section-title">星光值任务</h2>
+      <button class="btn btn-primary btn-sm" @click="openCreate">+ 新建任务</button>
+    </div>
+
+    <div v-if="state.tasks.length" class="task-list">
+      <div v-for="task in state.tasks" :key="task.id" class="card task-card">
+        <div class="task-main">
+          <div class="task-name">{{ task.name }}</div>
+          <div class="task-meta">
+            完成一次抽一只精灵 ·
+            已完成 <b class="number">{{ task.complete_count }}</b> 次
+          </div>
+        </div>
+        <div class="task-actions">
+          <button
+            class="btn btn-success btn-sm"
+            :disabled="completingId === task.id"
+            @click="completeTask(task)"
+          >
+            {{ completingId === task.id ? '抽取中...' : '完成' }}
+          </button>
+          <button class="btn btn-primary btn-sm" @click="openEdit(task)">编辑</button>
+          <button class="btn btn-danger btn-sm" @click="removeTask(task)">删除</button>
         </div>
       </div>
+    </div>
+
+    <div v-else class="card empty-state">
+      <div class="empty-state-icon">✨</div>
+      <p>还没有星光值任务，新建一个开始攒星光值吧</p>
     </div>
 
     <!-- 待入库：整块可点，点一下全部收进仓库 -->
@@ -89,7 +117,9 @@
     <!-- 今日抽到的精灵 -->
     <div class="section-head">
       <h2 class="section-title">今日抽到的精灵</h2>
-      <span class="pool-note">还剩 {{ state.poolRemaining }} 只没抽到</span>
+      <!-- 池子没读出来时别写「还剩 0 只」，那会被当成今天抽完了 -->
+      <span v-if="state.poolTotal > 0" class="pool-note">还剩 {{ state.poolRemaining }} 只没抽到</span>
+      <span v-else class="pool-note pool-note-error">精灵池没加载出来</span>
     </div>
 
     <div v-if="state.todayDraws.length" class="sprite-grid">
@@ -107,35 +137,8 @@
 
     <div v-else class="card empty-state sprite-empty">
       <div class="empty-state-icon">🔍</div>
-      <p>今天还没抽到精灵，完成一次星光值任务试试</p>
-    </div>
-
-    <!-- 星光值任务 -->
-    <div class="section-head tasks-head">
-      <h2 class="section-title">星光值任务</h2>
-      <button class="btn btn-primary btn-sm" @click="openCreate">+ 新建任务</button>
-    </div>
-
-    <div v-if="state.tasks.length" class="task-list">
-      <div v-for="task in state.tasks" :key="task.id" class="card task-card">
-        <div class="task-main">
-          <div class="task-name">{{ task.name }}</div>
-          <div class="task-meta">
-            完成一次抽一只精灵 ·
-            已完成 <b class="number">{{ task.complete_count }}</b> 次
-          </div>
-        </div>
-        <div class="task-actions">
-          <button class="btn btn-success btn-sm" @click="completeTask(task)">完成</button>
-          <button class="btn btn-primary btn-sm" @click="openEdit(task)">编辑</button>
-          <button class="btn btn-danger btn-sm" @click="removeTask(task)">删除</button>
-        </div>
-      </div>
-    </div>
-
-    <div v-else class="card empty-state">
-      <div class="empty-state-icon">✨</div>
-      <p>还没有星光值任务，新建一个开始攒星光值吧</p>
+      <p v-if="state.poolTotal > 0">今天还没抽到精灵，完成一次星光值任务试试</p>
+      <p v-else>没有读到精灵数据，检查一下数据目录里有没有 data/spirits.jsonl</p>
     </div>
 
     <!-- 流水 -->
@@ -208,13 +211,17 @@ const emptyState = {
   tasks: [],
   logs: [],
   todayDraws: [],
-  poolRemaining: 0
+  poolRemaining: 0,
+  poolTotal: 0
 }
 
 const state = ref({ ...emptyState })
 // 抽到精灵的结果卡（或「今天抽完了」这类提示），几秒后自己消失
 const result = ref(null)
 let resultTimer = null
+
+// 正在抽精灵的任务 id（空串 = 没有请求在飞），用来在请求期间禁用「完成」按钮
+const completingId = ref('')
 
 // 头像加载失败（图还没拷全）就换成占位符，不显示破图
 const broken = ref({})
@@ -330,6 +337,12 @@ const showResult = (payload) => {
 }
 
 const completeTask = async (task) => {
+  // 正在抽精灵的任务 id。结果卡是不挡操作的（点完成不会被弹窗挡住），
+  // 所以更得防连点：连点两下会一次任务抽走两只精灵，还破坏「不放回」的语义。
+  // 后端有一把按用户分的锁兜底，这里挡在第一线。
+  if (completingId.value) return
+  completingId.value = task.id
+
   try {
     const res = await starlightApi.completeTask(task.id)
 
@@ -348,6 +361,8 @@ const completeTask = async (task) => {
     }
   } catch (error) {
     showResult({ error: '完成失败' })
+  } finally {
+    completingId.value = ''
   }
 }
 
@@ -364,9 +379,8 @@ onMounted(fetchState)
 </script>
 
 <style scoped>
-.starlight-page {
-  max-width: 760px;
-}
+/* 这一页不再单独限宽：跟着外层 .main-content 用满 1200px，
+   否则右边会空出一大块（精灵小卡片那一排也正好铺开） */
 
 .page-subtitle {
   margin: -1rem 0 1.5rem;
@@ -374,9 +388,10 @@ onMounted(fetchState)
   color: rgba(255, 255, 255, 0.45);
 }
 
+/* 只剩「凝结许愿星总数」一张卡了，占满一行 */
 .overview {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr;
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -397,11 +412,6 @@ onMounted(fetchState)
   color: #FFD700;
   text-shadow: 0 0 24px rgba(255, 215, 0, 0.3);
   word-break: break-all;
-}
-
-.overview-value.starlight {
-  color: #7FB2FF;
-  text-shadow: 0 0 24px rgba(127, 178, 255, 0.3);
 }
 
 .overview-unit {
@@ -662,6 +672,11 @@ onMounted(fetchState)
 .pool-note {
   font-size: 0.8rem;
   color: rgba(255, 255, 255, 0.45);
+}
+
+/* 数据目录配错时用警告色，别让人以为只是「今天抽完了」 */
+.pool-note-error {
+  color: #FF8A80;
 }
 
 .tasks-head {

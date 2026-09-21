@@ -9,9 +9,9 @@ const {
   formatFragments,
   markWishReady,
   ensureWishFresh,
-  ensureWishFreshAll,
-  withLock
+  ensureWishFreshAll
 } = require('../services/wishState');
+const { withLock } = require('../utils/lock');
 
 const PREFIX = 'wishstar:wish';
 

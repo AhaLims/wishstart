@@ -140,6 +140,12 @@ function countRemaining(excludeNumbers = new Set()) {
   return loadSpirits().filter((s) => !excludeNumbers.has(s.number)).length;
 }
 
+// 池子总共有多少只。用来区分「今天真的抽完了」和「数据压根没读出来」——
+// 这两种情况在 drawSpirit 看来都是 null，但对用户是完全不同的两件事。
+function countTotal() {
+  return loadSpirits().length;
+}
+
 module.exports = {
   DATA_DIR,
   HEADS_URL_PREFIX,
@@ -148,5 +154,6 @@ module.exports = {
   headUrlFor,
   loadSpirits,
   drawSpirit,
-  countRemaining
+  countRemaining,
+  countTotal
 };

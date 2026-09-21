@@ -14,7 +14,8 @@
 // 不要把它接到统计页那份星星流水上。
 const { v4: uuidv4 } = require('uuid');
 const { getBeijingDate } = require('./beijingDate');
-const { drawSpirit, headUrlFor, countRemaining } = require('./spirits');
+const { drawSpirit, headUrlFor, countTotal } = require('./spirits');
+const { withLock } = require('../utils/lock');
 
 // 当天第 N 颗许愿星需要多少星光值。数组下标 0 就是「当天第 1 颗」。
 //   第 1-5 颗：每颗 80
@@ -163,47 +164,60 @@ async function completeStarlightTask(store, task, now = new Date()) {
   const userId = task.user_id;
   const date = getBeijingDate(now);
 
-  // 先 ensure 一次，让跨天重置（如果有）在加数之前发生——
-  // 否则刚加上的星光值会被紧接着的每日清零抹掉
-  await ensureStarlight(store, userId, now);
+  // 「读今天抽过的 → 抽一只没抽过的 → 写回去」整段串行。
+  // 不锁的话两个并发请求会各自读到同一份「今天抽过」的列表，各抽走一只不同的精灵——
+  // 不放回的保证就破了，一次任务完成白得两只。前端会禁用按钮，但不能只靠前端。
+  return withLock(`starlight:${userId}`, async () => {
+    // 先 ensure 一次，让跨天重置（如果有）在加数之前发生——
+    // 否则刚加上的星光值会被紧接着的每日清零抹掉
+    await ensureStarlight(store, userId, now);
 
-  // 不放回：把今天已经抽到过的编号排除掉
-  const drawn = await loadDraws(store, userId, date);
-  const spirit = drawSpirit(new Set(drawn.map((d) => d.number)));
-  if (!spirit) {
-    return { error: '今天的精灵都抽完了，明天再来吧' };
-  }
+    // 不放回：把今天已经抽到过的编号排除掉
+    const drawn = await loadDraws(store, userId, date);
+    const spirit = drawSpirit(new Set(drawn.map((d) => d.number)));
+    if (!spirit) {
+      // drawSpirit 在两种情况下都是 null：今天的抽完了，或者池子根本没读出来。
+      // 后者是数据目录配错了，得说清楚，不然会被当成「今天没得抽了」白等一天。
+      if (countTotal() === 0) {
+        return { error: '精灵池是空的，检查一下数据目录里有没有 data/spirits.jsonl' };
+      }
+      return { error: '今天的精灵都抽完了，明天再来吧' };
+    }
 
-  const earned = spirit.star;
+    const earned = spirit.star;
 
-  await store.hincrby(stateKey(userId), 'value', earned);
-  await store.hincrby(stateKey(userId), 'today_earned', earned);
+    await store.hincrby(stateKey(userId), 'value', earned);
+    await store.hincrby(stateKey(userId), 'today_earned', earned);
 
-  const draw = {
-    number: spirit.number,
-    name: spirit.name,
-    star: earned,
-    headUrl: headUrlFor(spirit),
-    at: now.getTime()
-  };
-  await store.zadd(drawsKey(userId, date), draw.at, JSON.stringify(draw));
+    const draw = {
+      number: spirit.number,
+      name: spirit.name,
+      star: earned,
+      headUrl: headUrlFor(spirit),
+      at: now.getTime()
+    };
+    await store.zadd(drawsKey(userId, date), draw.at, JSON.stringify(draw));
 
-  const newComplete = (parseInt(task.complete_count) || 0) + 1;
-  await store.hset(taskKey(task.id), {
-    complete_count: String(newComplete),
-    updated_at: String(Date.now())
+    // 完成次数在锁里重读一次：调用方手上那份是进锁之前读的，
+    // 两个并发请求会都从旧值 +1，最后一次写入把前一次盖掉
+    const fresh = (await store.hgetall(taskKey(task.id))) || {};
+    const newComplete = (parseInt(fresh.complete_count) || 0) + 1;
+    await store.hset(taskKey(task.id), {
+      complete_count: String(newComplete),
+      updated_at: String(Date.now())
+    });
+
+    await addLog(store, userId, {
+      type: 'income',
+      category: 'starlight_task',
+      amount: earned,
+      unit: '星光值',
+      description: `抽到「${spirit.name}」获得 ${earned} 星光值`
+    });
+
+    const state = await ensureStarlight(store, userId, now);
+    return { spirit: draw, earned, state, completeCount: newComplete };
   });
-
-  await addLog(store, userId, {
-    type: 'income',
-    category: 'starlight_task',
-    amount: earned,
-    unit: '星光值',
-    description: `抽到「${spirit.name}」获得 ${earned} 星光值`
-  });
-
-  const state = await ensureStarlight(store, userId, now);
-  return { spirit: draw, earned, state, completeCount: newComplete };
 }
 
 // 入库：把待入库的许愿星收进「凝结许愿星总数」
