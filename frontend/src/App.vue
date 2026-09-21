@@ -8,8 +8,7 @@
         <router-link to="/records">记录</router-link>
         <router-link to="/wishes">愿望</router-link>
         <router-link to="/starlight">星光值</router-link>
-        <router-link to="/stats">统计</router-link>
-        <router-link to="/settings">设置</router-link>
+        <router-link to="/stats">统计 &amp; 同步</router-link>
       </div>
     </nav>
     <main class="main-content">
