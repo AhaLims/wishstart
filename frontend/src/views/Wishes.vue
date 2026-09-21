@@ -7,6 +7,68 @@
       <button class="btn btn-primary" @click="showAddModal = true">+ 添加愿望</button>
     </div>
 
+    <!-- 抽卡面板。原本是独立一页，并进这里是因为补记碎片和线上抽卡共用同一套
+         消耗档（免费 → 半价 → 全价 5⭐），拆在两页反而看不清次数是怎么被花掉的 -->
+    <div class="draw-panel">
+      <div class="draw-counts">
+        <div class="count-card">
+          <span class="count-icon">⭐</span>
+          <div class="count-info">
+            <div class="count-value number">{{ stats?.currentStars || 0 }}</div>
+            <div class="count-label">可用星星</div>
+          </div>
+        </div>
+
+        <div class="count-card">
+          <span class="count-icon">🎲</span>
+          <div class="count-info">
+            <div class="count-value number">{{ stats?.diceCount || 0 }}</div>
+            <div class="count-label">掷骰子次数</div>
+          </div>
+        </div>
+
+        <div class="count-card">
+          <span class="count-icon">🎴</span>
+          <div class="count-info">
+            <div class="count-value number">{{ stats?.drawCount || 0 }}</div>
+            <div class="count-label">免费抽卡次数</div>
+          </div>
+        </div>
+
+        <div class="count-card">
+          <span class="count-icon">💰</span>
+          <div class="count-info">
+            <div class="count-value number">{{ stats?.halfDrawCount || 0 }}</div>
+            <div class="count-label">半价抽卡次数</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 消耗方式不用选，系统按资源自动挑一档，这里只提前说明会用哪一档 -->
+      <div class="draw-mode" :class="{ 'draw-mode-empty': !canDraw }">
+        <template v-if="canDraw">
+          <span class="mode-label">本次抽卡</span>
+          <span class="mode-name">{{ nextDrawMode.label }}</span>
+          <span class="mode-cost">{{ nextDrawMode.cost }}</span>
+        </template>
+        <template v-else>
+          <span class="mode-label">暂时抽不了</span>
+          <span class="mode-cost">抽卡次数和星星都不够，先去完成任务攒一点吧</span>
+        </template>
+      </div>
+
+      <button
+        class="btn btn-primary draw-btn"
+        :disabled="!canDraw || isDrawing"
+        @click="doDraw"
+      >
+        {{ isDrawing ? '抽卡中...' : '🎰 开始抽卡' }}
+      </button>
+      <p v-if="canDraw" class="draw-hint">
+        从所有收集中且未集满的愿望里随机抽一个 · 优先免费，其次半价，都没有才全价 5 ⭐
+      </p>
+    </div>
+
     <!-- 通用型愿望（系统自动创建，始终置顶） -->
     <div v-if="generalWish" class="wishes-section">
       <h2 class="section-title">通用愿望</h2>
@@ -844,6 +906,54 @@ const drawCostText = (data) => {
   return `消耗 ${data.cost} ⭐`
 }
 
+// ---- 线上抽卡（原本是独立一页，现在搬进愿望页）----
+
+const isDrawing = ref(false)
+const stats = computed(() => userStore.stats)
+
+// 消耗方式由后端按当前资源自动决定，前端这里只是提前算一遍给用户看。
+// 规则必须和后端 pickDrawMode 保持一致：免费 → 半价 → 全价
+const nextDrawMode = computed(() => {
+  const stars = stats.value?.currentStars || 0
+  const free = stats.value?.drawCount || 0
+  const half = stats.value?.halfDrawCount || 0
+
+  if (free >= 1) return { label: '免费抽卡', cost: `1次抽卡次数（还有 ${free} 次）`, affordable: true }
+  if (half >= 1 && stars >= 3) return { label: '半价抽卡', cost: '3 ⭐ + 1次半价次数', affordable: true }
+  if (stars >= 5) return { label: '全价抽卡', cost: '5 ⭐', affordable: true }
+  return { label: '', cost: '', affordable: false }
+})
+
+const canDraw = computed(() => nextDrawMode.value.affordable)
+
+// 线上抽卡：从所有收集中且未集满的愿望里随机抽一个（通用愿望也在池中，等权）。
+// 后端有锁，这里只是别让手指头把请求打出去。
+const doDraw = async () => {
+  if (isDrawing.value) return
+  isDrawing.value = true
+
+  try {
+    const res = await drawApi.draw({ userId: userStore.userId, type: 'stars' })
+
+    if (res.code === 0) {
+      const d = res.data
+      const total = parseInt(d.totalFragments) || 0
+      // 通用愿望没有上限，不带分母
+      const progress = total > 0 ? `${d.currentFragments}/${total}` : `${d.currentFragments}`
+      const full = d.isReady ? ' · 🎊 集满了，可以合成啦' : ''
+      showNotice(`抽到「${d.wishName}」碎片（${progress}）${full}`)
+      await fetchWishes()
+      await userStore.fetchStats()
+    } else {
+      showNotice(res.message || '抽卡失败', 'error')
+    }
+  } catch (error) {
+    showNotice('抽卡失败', 'error')
+  } finally {
+    isDrawing.value = false
+  }
+}
+
 // 补记碎片：线下抽到了这个愿望的碎片，点一下就记一个
 const recordFragment = async (wish) => {
   if (recordingId.value) return
@@ -873,6 +983,8 @@ const recordFragment = async (wish) => {
 
 onMounted(() => {
   fetchWishes()
+  // 抽卡面板要用到星星和抽卡次数，进页面就拉一次
+  userStore.fetchStats()
   timer = setInterval(() => { now.value = Date.now() }, 1000)
 })
 
@@ -885,6 +997,110 @@ onUnmounted(() => {
 <style scoped>
 .header-actions {
   margin-bottom: 1.5rem;
+}
+
+/* ---- 抽卡面板（原抽卡页搬过来的）---- */
+
+.draw-panel {
+  background: rgba(22, 33, 62, 0.8);
+  border-radius: 16px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  border: 1px solid rgba(74, 144, 217, 0.2);
+}
+
+.draw-counts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.count-card {
+  background: rgba(26, 26, 46, 0.8);
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid rgba(74, 144, 217, 0.15);
+}
+
+.count-icon {
+  font-size: 1.4rem;
+}
+
+.count-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.count-label {
+  color: #B0B0B0;
+  font-size: 0.85rem;
+}
+
+/* 消耗方式提示条：不让人选，只说明这次会用哪一档 */
+.draw-mode {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+  background: rgba(26, 26, 46, 0.8);
+  border: 1px solid rgba(74, 144, 217, 0.35);
+  border-radius: 10px;
+}
+
+.draw-mode-empty {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.draw-mode .mode-label {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.85rem;
+}
+
+.draw-mode .mode-name {
+  color: #4A90D9;
+  font-weight: 700;
+}
+
+.draw-mode .mode-cost {
+  margin-left: auto;
+  color: #FFD700;
+  font-size: 0.9rem;
+}
+
+.draw-mode-empty .mode-label {
+  color: #FFD700;
+  font-weight: 700;
+}
+
+.draw-mode-empty .mode-cost {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.85rem;
+}
+
+.draw-btn {
+  display: block;
+  width: 100%;
+  padding: 0.9rem 2rem;
+  font-size: 1.1rem;
+}
+
+/* 这条是对上面那个框的注解，贴左边读起来才跟得住 */
+.draw-hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+@media (max-width: 768px) {
+  .draw-counts {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .wishes-section {

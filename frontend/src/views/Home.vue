@@ -37,7 +37,7 @@
           <span class="action-icon">🎲</span>
           <span class="action-text">掷骰子</span>
         </button>
-        <button class="action-btn" @click="$router.push('/draw')">
+        <button class="action-btn" @click="$router.push('/wishes')">
           <span class="action-icon">🎰</span>
           <span class="action-text">抽卡</span>
         </button>
@@ -68,6 +68,14 @@
               ⏱ 时间型（星星计入掷骰子次数）
             </label>
           </div>
+
+          <!-- 标成时间型才会折算工时。这里实时算一遍，省得去记录页才发现对不上 -->
+          <p v-if="quickType === 'time'" class="quick-time-hint">
+            本次 = <strong>{{ quickMinutesText }}</strong> 工时（1 颗星 = 25 分钟）
+            <template v-if="isWeekendToday">
+              <br />今天周末，星星会翻倍，但<b>工时按翻倍前的星数算</b>，不会跟着翻倍
+            </template>
+          </p>
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" @click="submitQuickRecord">提交</button>
@@ -91,6 +99,33 @@ const quickStars = ref(5)
 const quickType = ref('general')
 
 const stats = computed(() => userStore.stats)
+
+// ---- 快速记录的工时预览 ----
+//
+// 规则跟后端 records.js 的 minutesOf() 必须一致，不然预览和记录页会对不上：
+//   - 只有标成「时间型」的才折算工时
+//   - 1 颗星 = 25 分钟
+//   - 周末星星翻倍，但那是奖励不是工时，要按翻倍前的星数算
+
+// 今天是不是周末。用本地日期，跟后端 completions.js 的 now.getDay() 是同一套。
+const isWeekendToday = computed(() => {
+  const day = new Date().getDay()
+  return day === 0 || day === 6
+})
+
+const quickMinutes = computed(() => {
+  if (quickType.value !== 'time') return 0
+  return Math.max(0, parseInt(quickStars.value) || 0) * 25
+})
+
+// 跟记录页一个格式：1h15min / 1h / 25min
+const quickMinutesText = computed(() => {
+  const m = quickMinutes.value
+  const h = Math.floor(m / 60)
+  const rest = m % 60
+  if (h > 0) return rest > 0 ? `${h}h${rest}min` : `${h}h`
+  return `${rest}min`
+})
 
 onMounted(async () => {
   await userStore.initUser()
@@ -220,6 +255,18 @@ const submitQuickRecord = async () => {
   gap: 0.5rem;
   cursor: pointer;
   font-size: 0.9rem;
+}
+
+/* 工时预览：是注解不是表单，所以压小、压暗，别抢上面的输入框 */
+.quick-time-hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.quick-time-hint strong {
+  color: #7FB2FF;
 }
 
 @media (max-width: 768px) {

@@ -5,7 +5,6 @@ import Records from './views/Records.vue'
 import Dice from './views/Dice.vue'
 import Starlight from './views/Starlight.vue'
 import Wishes from './views/Wishes.vue'
-import Draw from './views/Draw.vue'
 import Stats from './views/Stats.vue'
 import Settings from './views/Settings.vue'
 
@@ -16,7 +15,6 @@ const routes = [
   { path: '/dice', component: Dice },
   { path: '/starlight', component: Starlight },
   { path: '/wishes', component: Wishes },
-  { path: '/draw', component: Draw },
   { path: '/stats', component: Stats },
   { path: '/settings', component: Settings },
   // 兜底：工作时间页删掉后，浏览器历史/收藏里还留着的 /work 会落在这里，
