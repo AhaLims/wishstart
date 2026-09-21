@@ -56,8 +56,8 @@ export const wishApi = {
   updateWish: (wishId, data) => api.put(`/wishes/${wishId}`, data),
   deleteWish: (wishId) => api.delete(`/wishes/${wishId}`),
   completeWish: (wishId) => api.post(`/wishes/${wishId}/complete`),
-  // 实现通用愿望：消耗指定数量的碎片
-  realizeWish: (wishId, fragments) => api.post(`/wishes/${wishId}/realize`, { fragments })
+  // 实现通用愿望：起个名字 + 消耗指定数量的碎片，实现出来的会进「已完成」
+  realizeWish: (wishId, fragments, name) => api.post(`/wishes/${wishId}/realize`, { fragments, name })
 }
 
 // 抽卡API

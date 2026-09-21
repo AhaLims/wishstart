@@ -387,6 +387,21 @@
         <h3 class="modal-title">实现通用愿望</h3>
 
         <div class="form-group">
+          <label class="label">愿望名称</label>
+          <input
+            v-model="realizeName"
+            type="text"
+            class="input"
+            placeholder="这次实现的是什么？"
+            maxlength="30"
+            @keyup.enter="submitRealize"
+          />
+          <p class="form-hint">
+            实现之后它会带着这个名字进「已完成」
+          </p>
+        </div>
+
+        <div class="form-group">
           <label class="label">消耗碎片数量</label>
           <input
             v-model.number="realizeAmount"
@@ -400,9 +415,13 @@
           </p>
         </div>
 
+        <p v-if="realizeError" class="form-error">{{ realizeError }}</p>
+
         <div class="modal-actions">
-          <button class="btn btn-primary" @click="submitRealize">确认实现</button>
-          <button class="btn" @click="showRealizeModal = false">取消</button>
+          <button class="btn btn-primary" :disabled="submittingRealize" @click="submitRealize">
+            {{ submittingRealize ? '实现中...' : '确认实现' }}
+          </button>
+          <button class="btn" :disabled="submittingRealize" @click="closeRealize">取消</button>
         </div>
       </div>
     </div>
@@ -420,6 +439,9 @@ const showAddModal = ref(false)
 const showEditModal = ref(false)
 const showRealizeModal = ref(false)
 const realizeAmount = ref(1)
+const realizeName = ref('')
+const realizeError = ref('')
+const submittingRealize = ref(false)
 
 // 倒计时用的"当前时间"，每秒刷新一次
 const now = ref(Date.now())
@@ -684,32 +706,52 @@ const completeWish = async (wishId) => {
 const openRealizeModal = () => {
   // 默认填入当前全部碎片，用户可以改小
   realizeAmount.value = generalCurrent.value
+  realizeName.value = ''
+  realizeError.value = ''
   showRealizeModal.value = true
 }
 
-const submitRealize = async () => {
-  const amount = Number(realizeAmount.value)
+const closeRealize = () => {
+  if (submittingRealize.value) return
+  showRealizeModal.value = false
+}
 
+// 后端那把锁是主力，这里只是别让手指头把请求打出去
+const submitRealize = async () => {
+  if (submittingRealize.value) return
+
+  const amount = Number(realizeAmount.value)
+  const name = realizeName.value.trim()
+
+  if (!name) {
+    realizeError.value = '请填写这次实现的愿望名称'
+    return
+  }
   if (!Number.isInteger(amount) || amount < 1) {
-    alert('请输入要消耗的碎片数量')
+    realizeError.value = '请输入要消耗的碎片数量'
     return
   }
   if (amount > generalCurrent.value) {
-    alert(`碎片不足，当前只有 ${generalCurrent.value} 个碎片`)
+    realizeError.value = `碎片不足，当前只有 ${generalCurrent.value} 个碎片`
     return
   }
 
+  realizeError.value = ''
+  submittingRealize.value = true
   try {
-    const res = await wishApi.realizeWish(generalWish.value.id, amount)
+    const res = await wishApi.realizeWish(generalWish.value.id, amount, name)
     if (res.code === 0) {
       showRealizeModal.value = false
-      alert(`🌟 通用愿望已实现！消耗 ${amount} 个碎片，剩余 ${res.data.currentFragments} 个`)
       await fetchWishes()
+      await userStore.fetchStats()
+      showNotice(`🎉「${name}」实现啦，已放进已完成 · 消耗 ${amount} 个碎片，还剩 ${res.data.currentFragments} 个`)
     } else {
-      alert(res.message || '实现失败')
+      realizeError.value = res.message || '实现失败'
     }
   } catch (error) {
-    alert('实现失败')
+    realizeError.value = '实现失败'
+  } finally {
+    submittingRealize.value = false
   }
 }
 
@@ -1197,6 +1239,13 @@ onUnmounted(() => {
 .btn-import {
   cursor: pointer;
   display: inline-block;
+}
+
+/* 弹框里的行内报错：弹框不关，错误就贴在按钮上方 */
+.form-error {
+  color: #FF8A80;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
 }
 
 /* 补记碎片的提示条：固定在底部中间，不挡住卡片，几秒后自己消失 */

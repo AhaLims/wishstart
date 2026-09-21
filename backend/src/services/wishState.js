@@ -20,6 +20,11 @@ const READY_TTL_MS = Number(process.env.WISH_READY_TTL_MS) || 7 * 24 * 3600 * 10
 
 const WISH_TYPE_NORMAL = 'normal';
 const WISH_TYPE_GENERAL = 'general';
+// 通用愿望「实现」出来的那一条。单独一个类型是为了三件事：
+// 1. 跟用户自己新建的普通愿望区分开（这类是流水账，不是攒出来的）
+// 2. ensureGeneralWish 只认 'general'，不会被它干扰
+// 3. 以后想单独统计「一共实现过多少」时不用去翻名字
+const WISH_TYPE_REALIZED = 'realized';
 
 // 价格换算：多少元 = 1 个碎片。用户填的是价格，实际攒的仍是碎片。
 const YUAN_PER_FRAGMENT = Number(process.env.WISH_YUAN_PER_FRAGMENT) || 5;
@@ -27,6 +32,10 @@ const YUAN_PER_FRAGMENT = Number(process.env.WISH_YUAN_PER_FRAGMENT) || 5;
 // 通用型愿望的固定属性
 const GENERAL_WISH_NAME = '通用愿望';
 const GENERAL_WISH_ICON = '🌟';
+
+// 「实现」出来的愿望统一用图标选择器里的第一个（前端 iconOptions[0]）。
+// 这类愿望是流水账，每次实现都让用户挑一遍图标只是多一步操作。
+const REALIZED_WISH_ICON = '🎁';
 
 // ---------- 纯函数（无 IO） ----------
 
@@ -88,6 +97,33 @@ function formatFragments(wish) {
   const current = getCurrentFragments(wish);
   if (isGeneralWish(wish)) return `${current}`;
   return `${current}/${getTotalFragments(wish)}`;
+}
+
+// 构造「实现」出来的那条愿望：一诞生就是已完成、集满状态。
+//
+// total 和 current 都填这次消耗的碎片数，于是它在已完成列表里长得跟普通愿望一样
+// （20/20、进度条满格），而不是一个空壳。status 直接给 completed，
+// 不经过 collecting —— 它是「已经兑现了」的记账，不存在还能再往里加碎片这回事。
+//
+// 字段全部 String() 一遍：memoryStore.hset 不会帮忙转，混着写会和 jsonStore 不一致。
+function buildRealizedWish(userId, name, fragments, nowMs) {
+  const now = String(nowMs);
+  const n = String(fragments);
+  return {
+    id: uuidv4(),
+    user_id: userId,
+    name: String(name).trim(),
+    icon: REALIZED_WISH_ICON,
+    image: '',
+    wish_type: WISH_TYPE_REALIZED,
+    price: String(fragmentsToPrice(fragments)),
+    total_fragments: n,
+    current_fragments: n,
+    status: 'completed',
+    completed_at: now,
+    created_at: now,
+    updated_at: now
+  };
 }
 
 // ---------- IO ----------
@@ -218,8 +254,10 @@ module.exports = {
   YUAN_PER_FRAGMENT,
   WISH_TYPE_NORMAL,
   WISH_TYPE_GENERAL,
+  WISH_TYPE_REALIZED,
   GENERAL_WISH_NAME,
   GENERAL_WISH_ICON,
+  REALIZED_WISH_ICON,
   isGeneralWish,
   getTotalFragments,
   priceToFragments,
@@ -229,6 +267,7 @@ module.exports = {
   isWishFull,
   isDrawEligible,
   formatFragments,
+  buildRealizedWish,
   markWishReady,
   ensureWishFresh,
   ensureWishFreshAll,

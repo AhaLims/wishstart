@@ -11,10 +11,12 @@ const {
   priceToFragments,
   fragmentsToPrice,
   getWishPrice,
+  buildRealizedWish,
   ensureWishFresh,
   ensureWishFreshAll,
   ensureGeneralWish
 } = require('../services/wishState');
+const { withLock } = require('../utils/lock');
 const {
   saveWishImage,
   deleteWishImageIfUnreferenced
@@ -335,11 +337,14 @@ router.post('/:wishId/complete', async (req, res) => {
   }
 });
 
-// 实现通用愿望：消耗指定数量的碎片
+// 实现通用愿望：给这次兑现起个名字，扣掉相应碎片，生成一条已完成愿望。
+//
+// 通用愿望本身留在原地继续攒（剩下的碎片不动），所以这里有两份数据要写：
+// 通用愿望扣碎片 + 新愿望入索引。两件事都得在一个临界区里。
 router.post('/:wishId/realize', async (req, res) => {
   try {
     const { wishId } = req.params;
-    const { fragments } = req.body;
+    const { fragments, name } = req.body;
 
     const existing = await req.redis.hgetall(`${PREFIX}:${wishId}`);
     if (!existing || !existing.id) {
@@ -350,50 +355,68 @@ router.post('/:wishId/realize', async (req, res) => {
       return res.json({ code: 1, message: '只有通用愿望可以使用「实现」功能' });
     }
 
+    const realizedName = String(name === undefined || name === null ? '' : name).trim();
+    if (!realizedName) {
+      return res.json({ code: 1, message: '请填写这次实现的愿望名称' });
+    }
+
     const amount = Number(fragments);
     if (!Number.isInteger(amount) || amount < 1) {
       return res.json({ code: 1, message: '请输入要消耗的碎片数量' });
     }
 
-    // 消耗量不能超过当前持有量（可以一次用完）
-    const before = await req.redis.hgetall(`${PREFIX}:${wishId}`);
-    const currentFragments = getCurrentFragments(before);
-    if (amount > currentFragments) {
-      return res.json({ code: 1, message: `碎片不足，当前只有${currentFragments}个碎片` });
-    }
-
-    const now = Date.now();
-
-    // 直接减去，并记录实现次数
-    const after = await req.redis.hincrby(`${PREFIX}:${wishId}`, 'current_fragments', -amount);
-    await req.redis.hincrby(`${PREFIX}:${wishId}`, 'realize_count', 1);
-    await req.redis.hset(`${PREFIX}:${wishId}`, {
-      last_realized_at: now.toString(),
-      updated_at: now.toString()
-    });
-
-    // 记录流水
-    const log = {
-      id: uuidv4(),
-      type: 'expenditure',
-      category: 'wish_realize',
-      amount: -amount,
-      description: `实现通用愿望，消耗${amount}个碎片（剩余${after}个）`,
-      created_at: now
-    };
-    await req.redis.zadd(`wishstar:logs:${existing.user_id}`, now, JSON.stringify(log));
-
-    const latest = await req.redis.hgetall(`${PREFIX}:${wishId}`);
-
-    res.json({
-      code: 0,
-      data: {
-        wishName: latest.name,
-        consumed: amount,
-        currentFragments: after,
-        realizeCount: parseInt(latest.realize_count, 10) || 0
+    // 「读当前碎片 → 判断够不够 → 扣掉」串行。中间隔着 await，不锁的话
+    // 连点两下会双双读到同一个 current_fragments、双双判定够用，
+    // 结果扣出负数还多生成一条已完成愿望。
+    const result = await withLock(`wish-realize:${wishId}`, async () => {
+      const before = await req.redis.hgetall(`${PREFIX}:${wishId}`);
+      const currentFragments = getCurrentFragments(before);
+      if (amount > currentFragments) {
+        return { error: `碎片不足，当前只有${currentFragments}个碎片` };
       }
+
+      const now = Date.now();
+
+      // 直接减去，并记录实现次数
+      const after = await req.redis.hincrby(`${PREFIX}:${wishId}`, 'current_fragments', -amount);
+      await req.redis.hincrby(`${PREFIX}:${wishId}`, 'realize_count', 1);
+      await req.redis.hset(`${PREFIX}:${wishId}`, {
+        last_realized_at: now.toString(),
+        updated_at: now.toString()
+      });
+
+      // 这次兑现出来的愿望，直接以「已完成」的姿态入账
+      const realized = buildRealizedWish(existing.user_id, realizedName, amount, now);
+      await req.redis.hset(`${PREFIX}:${realized.id}`, realized);
+      await req.redis.sadd(`wishstar:wishes:index:${existing.user_id}`, realized.id);
+
+      // 记录流水
+      const log = {
+        id: uuidv4(),
+        type: 'expenditure',
+        category: 'wish_realize',
+        amount: -amount,
+        description: `实现「${realizedName}」，消耗${amount}个碎片（剩余${after}个）`,
+        created_at: now
+      };
+      await req.redis.zadd(`wishstar:logs:${existing.user_id}`, now, JSON.stringify(log));
+
+      const latest = await req.redis.hgetall(`${PREFIX}:${wishId}`);
+
+      return {
+        data: {
+          realizedWish: realized,
+          consumed: amount,
+          currentFragments: after,
+          realizeCount: parseInt(latest.realize_count, 10) || 0
+        }
+      };
     });
+
+    if (result.error) {
+      return res.json({ code: 1, message: result.error });
+    }
+    res.json({ code: 0, data: result.data });
   } catch (error) {
     res.status(500).json({ code: 1, message: error.message });
   }
