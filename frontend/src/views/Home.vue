@@ -4,7 +4,7 @@
 
     <!-- 资源展示 -->
     <div class="resources-grid">
-      <div v-if="isDesktop()" class="resource-card work-card">
+      <div class="resource-card work-card">
         <div class="resource-icon">⏱</div>
         <div class="resource-info">
           <div class="resource-label">今日已工作</div>
@@ -33,7 +33,7 @@
     <div class="quick-actions">
       <h2 class="section-title">快捷操作</h2>
       <div class="actions-grid">
-        <button v-if="isDesktop()" class="action-btn" @click="$router.push('/work')">
+        <button class="action-btn" @click="$router.push('/work')">
           <span class="action-icon">⏱</span>
           <span class="action-text">去工作</span>
         </button>
@@ -94,7 +94,6 @@
 import { ref, onMounted, computed } from 'vue'
 import { useUserStore } from '../stores/user'
 import { recordApi, workApi } from '../api'
-import { isDesktop } from '../utils/env'
 
 const userStore = useUserStore()
 const showQuickRecord = ref(false)
@@ -127,9 +126,7 @@ const fetchWorkToday = async () => {
 onMounted(async () => {
   await userStore.initUser()
   await userStore.fetchStats()
-  if (isDesktop()) {
-    await fetchWorkToday()
-  }
+  await fetchWorkToday()
 })
 
 const submitQuickRecord = async () => {

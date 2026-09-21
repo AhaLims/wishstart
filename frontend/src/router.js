@@ -9,7 +9,6 @@ import Draw from './views/Draw.vue'
 import Stats from './views/Stats.vue'
 import Work from './views/Work.vue'
 import Settings from './views/Settings.vue'
-import { isDesktop } from './utils/env'
 
 const routes = [
   { path: '/', component: Home },
@@ -27,15 +26,6 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
-})
-
-// 计时功能仅桌面端使用
-router.beforeEach((to, from, next) => {
-  if (to.path === '/work' && !isDesktop()) {
-    next('/')
-  } else {
-    next()
-  }
 })
 
 export default router
