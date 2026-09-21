@@ -7,8 +7,8 @@
         <router-link to="/tasks">任务</router-link>
         <router-link to="/records">记录</router-link>
         <router-link to="/dice">骰子</router-link>
-        <router-link to="/starlight">星光值</router-link>
         <router-link to="/wishes">愿望</router-link>
+        <router-link to="/starlight">星光值</router-link>
         <router-link to="/stats">统计</router-link>
         <router-link to="/settings">设置</router-link>
       </div>

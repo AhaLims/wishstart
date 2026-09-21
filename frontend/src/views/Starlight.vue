@@ -3,18 +3,30 @@
     <h1 class="page-title">星光值</h1>
     <p class="page-subtitle">星光值可凝结成许愿星</p>
 
-    <!-- 凝结许愿星总数。当天还剩多少星光值在下面的进度条上，不单列一张卡 -->
+    <!-- 凝结许愿星总数 + 待入库，同一张卡。
+         这两件事本来就是一件事的两半（收了才进总数），拆成两块卡的话，
+         待入库那块排在任务列表下面，得往下滚才点得到，上面只看得到一个
+         总数就会以为凝出来的星星少了。现在上面是已入库的总数，下面是天上
+         那几颗，**整块点一下全收进来**。
+         当天还剩多少星光值在下面的进度条上，也不单列一张卡。 -->
     <div class="overview">
       <div class="card overview-card">
         <div class="overview-label">凝结许愿星总数</div>
         <div class="overview-value number">
           {{ state.banked }}<span class="overview-unit">颗</span>
         </div>
-        <!-- 待入库那一整块排在任务列表下面，不往下滚是看不见的 ——
-             只在这张卡上看到「总数 12」会以为凝出来的星星少了。
-             这里补一行，数字旁边就能对上账；收星星还是去下面那块点 -->
+
+        <!-- 没有待入库的时候整块不出现，不留一个空的星星框 -->
         <div v-if="state.pending > 0" class="overview-pending">
-          另有 <b class="number">{{ state.pending }}</b> 颗待入库
+          <div class="pending-title">
+            天上有 {{ state.pending }} 颗许愿星等着你摘
+          </div>
+          <p class="pending-hint">
+            点一下就把这 {{ state.pending }} 颗全部收进仓库（不点也不会消失，明天还在）
+          </p>
+          <button class="pending-stars" title="全部收进仓库" :disabled="collecting" @click="collectAll">
+            <span v-for="n in state.pending" :key="n" class="pending-star">⭐</span>
+          </button>
         </div>
       </div>
     </div>
@@ -51,19 +63,6 @@
     <div v-else class="card empty-state">
       <div class="empty-state-icon">✨</div>
       <p>还没有星光值任务，新建一个开始攒星光值吧</p>
-    </div>
-
-    <!-- 待入库：整块可点，点一下全部收进仓库 -->
-    <div v-if="state.pending > 0" class="card pending-card">
-      <div class="pending-title">
-        天上有 {{ state.pending }} 颗许愿星等着你摘
-      </div>
-      <p class="pending-hint">
-        点一下就把这 {{ state.pending }} 颗全部收进仓库（不点也不会消失，明天还在）
-      </p>
-      <button class="pending-stars" title="全部收进仓库" :disabled="collecting" @click="collectAll">
-        <span v-for="n in state.pending" :key="n" class="pending-star">⭐</span>
-      </button>
     </div>
 
     <!-- 距下一颗的进度 -->
@@ -563,22 +562,13 @@ onMounted(fetchState)
   text-shadow: none;
 }
 
-/* 「另有 N 颗待入库」。总数旁边的一行小字，不抢主数字 */
+/* 待入库那一块，嵌在「凝结许愿星总数」卡里（原来是自己一张卡）。
+   划一道细线跟上面的总数分开 —— 这两个数是两笔账（已入库 / 还在天上），
+   挨着放但不该看成一个数 */
 .overview-pending {
-  margin-top: 0.4rem;
-  font-size: 0.85rem;
-  color: #B0B0B0;
-}
-
-.overview-pending b {
-  font-size: 1rem;
-  color: #FFD700;
-}
-
-.pending-card {
-  margin-bottom: 1.5rem;
-  border-color: rgba(255, 215, 0, 0.4);
-  box-shadow: 0 8px 32px rgba(255, 215, 0, 0.12);
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(255, 215, 0, 0.18);
 }
 
 .pending-title {
@@ -594,10 +584,12 @@ onMounted(fetchState)
   margin-bottom: 1rem;
 }
 
-/* 整块是一个按钮：点哪儿都是「全部入库」 */
+/* 整块是一个按钮：点哪儿都是「全部入库」。
+   星星居中 —— 这块现在站在一张居中的卡里，靠左会跟上面的数字错开一截 */
 .pending-stars {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 0.4rem;
   width: 100%;
   padding: 0.75rem;
