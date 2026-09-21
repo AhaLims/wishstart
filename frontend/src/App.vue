@@ -6,7 +6,6 @@
         <router-link to="/">首页</router-link>
         <router-link to="/tasks">任务</router-link>
         <router-link to="/records">记录</router-link>
-        <router-link to="/dice">骰子</router-link>
         <router-link to="/wishes">愿望</router-link>
         <router-link to="/starlight">星光值</router-link>
         <router-link to="/stats">统计</router-link>
@@ -53,7 +52,7 @@
 .nav-links {
   display: flex;
   gap: 1rem;
-  /* 入口变多了（现在 9 个），窄一点的窗口放不下整排时，
+  /* 比一行放得下的数量多，窄一点的窗口放不下整排时，
      让整组链接一起换行，而不是把「首页」拆成「首」「页」两行 */
   flex-wrap: wrap;
   justify-content: flex-end;
