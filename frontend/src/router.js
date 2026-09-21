@@ -3,6 +3,7 @@ import Home from './views/Home.vue'
 import Tasks from './views/Tasks.vue'
 import Records from './views/Records.vue'
 import Dice from './views/Dice.vue'
+import Random from './views/Random.vue'
 import Wishes from './views/Wishes.vue'
 import Draw from './views/Draw.vue'
 import Stats from './views/Stats.vue'
@@ -15,6 +16,7 @@ const routes = [
   { path: '/tasks', component: Tasks },
   { path: '/records', component: Records },
   { path: '/dice', component: Dice },
+  { path: '/random', component: Random },
   { path: '/wishes', component: Wishes },
   { path: '/draw', component: Draw },
   { path: '/stats', component: Stats },

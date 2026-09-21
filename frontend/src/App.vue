@@ -7,6 +7,7 @@
         <router-link to="/tasks">任务</router-link>
         <router-link to="/records">记录</router-link>
         <router-link to="/dice">骰子</router-link>
+        <router-link to="/random">随机数</router-link>
         <router-link to="/wishes">愿望</router-link>
         <router-link to="/draw">抽卡</router-link>
         <router-link to="/stats">统计</router-link>
@@ -52,11 +53,16 @@ import { isDesktop } from './utils/env'
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  white-space: nowrap;
 }
 
 .nav-links {
   display: flex;
   gap: 1rem;
+  /* 入口变多了（现在 9 个），窄一点的窗口放不下整排时，
+     让整组链接一起换行，而不是把「首页」拆成「首」「页」两行 */
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .nav-links a {
@@ -67,6 +73,7 @@ import { isDesktop } from './utils/env'
   transition: all 0.3s ease;
   font-family: 'Nunito', sans-serif;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .nav-links a:hover {
