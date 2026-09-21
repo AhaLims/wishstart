@@ -62,29 +62,7 @@
       </button>
     </div>
 
-    <!-- 线下抽卡记录区域 -->
-    <div class="draw-area manual-section">
-      <h3>线下抽卡记录</h3>
-      <p class="hint">如果你在线下抽了卡，可以在这里记录（消耗方式同上，也是自动挑的）</p>
-
-      <div class="form-group">
-        <label class="label">选择愿望</label>
-        <select v-model="selectedWishId" class="input">
-          <option value="">请选择愿望</option>
-          <option v-for="wish in wishes" :key="wish.id" :value="wish.id">
-            {{ wish.name }} ¥{{ wishPrice(wish) }} ({{ fragmentsText(wish) }})
-          </option>
-        </select>
-      </div>
-
-      <button
-        class="btn btn-primary"
-        :disabled="!canSubmitManual"
-        @click="submitManualDraw"
-      >
-        记录抽卡（默认+1碎片）
-      </button>
-    </div>
+    <!-- 线下抽卡不在这里记了，改在愿望页对应愿望的卡片上「补记碎片」 -->
 
     <!-- 抽卡结果 -->
     <div v-if="lastResult" class="result-card">
@@ -103,13 +81,11 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useUserStore } from '../stores/user'
-import { drawApi, wishApi } from '../api'
+import { drawApi } from '../api'
 
 const userStore = useUserStore()
 const isDrawing = ref(false)
 const lastResult = ref(null)
-const wishes = ref([])
-const selectedWishId = ref('')
 
 const stats = computed(() => userStore.stats)
 
@@ -132,22 +108,8 @@ const nextDrawMode = computed(() => {
   return { label: '', cost: '', affordable: false }
 })
 
-// 抽卡按钮是否可用（线上抽卡和线下记录共用）：三档里有一档用得起就行
+// 抽卡按钮是否可用：三档里有一档用得起就行
 const canDraw = computed(() => nextDrawMode.value.affordable)
-
-// 线下抽卡记录按钮是否可用（复用 canDraw 逻辑）
-const canSubmitManual = computed(() => {
-  if (!selectedWishId.value) return false
-  return canDraw.value
-})
-
-// 愿望价格（元）。老数据没存 price，按碎片数反推；通用愿望没有价格
-const wishPrice = (w) => {
-  if (w.wish_type === 'general') return ''
-  const stored = parseInt(w.price)
-  if (!Number.isNaN(stored)) return stored
-  return (parseInt(w.total_fragments) || 0) * 5
-}
 
 // 碎片展示：通用愿望（无上限）只显示当前数量，不带分母
 const fragmentsText = (w) => {
@@ -155,20 +117,6 @@ const fragmentsText = (w) => {
   const current = parseInt(w.current_fragments ?? w.currentFragments) || 0
   const total = parseInt(w.total_fragments ?? w.totalFragments) || 0
   return total > 0 ? `${current}/${total}` : `${current}`
-}
-
-const fetchWishes = async () => {
-  const res = await wishApi.getWishes(userStore.userId)
-  if (res.code === 0) {
-    // 只有「收集中且未集满」的愿望还能获得碎片，
-    // 已过期 / 已完成 / 已集满的都会被后端拒绝，不必出现在下拉里
-    wishes.value = res.data.filter(w => {
-      if (w.status !== 'collecting') return false
-      if (w.wish_type === 'general') return true
-      const total = parseInt(w.total_fragments) || 0
-      return total <= 0 || (parseInt(w.current_fragments) || 0) < total
-    })
-  }
 }
 
 const doDraw = async () => {
@@ -193,34 +141,8 @@ const doDraw = async () => {
   }
 }
 
-const submitManualDraw = async () => {
-  if (!selectedWishId.value) {
-    alert('请选择愿望')
-    return
-  }
-
-  try {
-    const res = await drawApi.submitManual({
-      userId: userStore.userId,
-      wishId: selectedWishId.value
-    })
-
-    if (res.code === 0) {
-      alert(`记录成功！${res.data.wishName} 获得 1 个碎片`)
-      selectedWishId.value = ''
-      await userStore.fetchStats()
-      await fetchWishes()
-    } else {
-      alert(res.message || '记录失败')
-    }
-  } catch (error) {
-    alert('记录失败')
-  }
-}
-
 onMounted(() => {
   userStore.fetchStats()
-  fetchWishes()
 })
 </script>
 

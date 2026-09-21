@@ -48,6 +48,13 @@
           >
             实现
           </button>
+          <button
+            class="btn btn-primary"
+            :disabled="recordingId === generalWish.id"
+            @click="recordFragment(generalWish)"
+          >
+            {{ recordingId === generalWish.id ? '记录中...' : '补记碎片' }}
+          </button>
         </div>
       </div>
     </div>
@@ -108,6 +115,15 @@
               @click="completeWish(wish.id)"
             >
               合成愿望
+            </button>
+            <!-- 集满的愿望收不了碎片了，先合成再记 -->
+            <button
+              v-else
+              class="btn btn-primary"
+              :disabled="recordingId === wish.id"
+              @click="recordFragment(wish)"
+            >
+              {{ recordingId === wish.id ? '记录中...' : '补记碎片' }}
             </button>
             <button class="btn" @click="openEditModal(wish)">编辑</button>
             <button class="btn btn-danger" @click="deleteWish(wish.id)">删除</button>
@@ -206,6 +222,10 @@
         </div>
       </div>
     </div>
+
+    <!-- 补记碎片的结果提示。补记是个可以连着点的动作，用 alert 每点一次弹一次太吵，
+         所以做成一闪而过的提示条，几秒后自己消失 -->
+    <div v-if="notice" class="toast" :class="notice.type">{{ notice.text }}</div>
 
     <!-- 添加愿望弹框 -->
     <div v-if="showAddModal" class="modal-overlay" @click.self="showAddModal = false">
@@ -392,7 +412,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useUserStore } from '../stores/user'
-import { wishApi } from '../api'
+import { wishApi, drawApi } from '../api'
 
 const userStore = useUserStore()
 const wishes = ref([])
@@ -760,6 +780,55 @@ const updateWish = async () => {
   }
 }
 
+// 正在补记碎片的愿望 id（空串 = 没有请求在飞）。
+// 连点一下会连发好几个请求，前端这里把按钮禁掉是第一道，
+// 后端 draws.js 里那把 per-user 的锁是第二道（多标签页、慢网络重试也挡得住）
+const recordingId = ref('')
+
+// 一闪而过的提示条
+const notice = ref(null)
+let noticeTimer = null
+
+const showNotice = (text, type = 'success') => {
+  notice.value = { text, type }
+  clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => { notice.value = null }, 3500)
+}
+
+// 这次补记花了什么，跟后端 pickDrawMode 的三档一一对应
+const drawCostText = (data) => {
+  if (data.drawType === 'free') return '消耗 1 次抽卡次数'
+  if (data.drawType === 'half') return `消耗 ${data.cost} ⭐ + 1 次半价次数`
+  return `消耗 ${data.cost} ⭐`
+}
+
+// 补记碎片：线下抽到了这个愿望的碎片，点一下就记一个
+const recordFragment = async (wish) => {
+  if (recordingId.value) return
+  recordingId.value = wish.id
+
+  try {
+    const res = await drawApi.submitManual({ userId: userStore.userId, wishId: wish.id })
+
+    if (res.code === 0) {
+      const data = res.data
+      const total = parseInt(data.totalFragments) || 0
+      // 通用愿望没有上限，不带分母
+      const progress = total > 0 ? `${data.currentFragments}/${total}` : `${data.currentFragments}`
+      const full = data.isReady ? ' · 🎊 集满了，可以合成啦' : ''
+      showNotice(`「${data.wishName}」+1 碎片（${progress}）· ${drawCostText(data)}${full}`)
+      await fetchWishes()
+      await userStore.fetchStats()
+    } else {
+      showNotice(res.message || '补记失败', 'error')
+    }
+  } catch (error) {
+    showNotice('补记失败', 'error')
+  } finally {
+    recordingId.value = ''
+  }
+}
+
 onMounted(() => {
   fetchWishes()
   timer = setInterval(() => { now.value = Date.now() }, 1000)
@@ -767,6 +836,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  clearTimeout(noticeTimer)
 })
 </script>
 
@@ -1127,6 +1197,34 @@ onUnmounted(() => {
 .btn-import {
   cursor: pointer;
   display: inline-block;
+}
+
+/* 补记碎片的提示条：固定在底部中间，不挡住卡片，几秒后自己消失 */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 2rem;
+  transform: translateX(-50%);
+  z-index: 100;
+  max-width: min(90vw, 480px);
+  padding: 0.85rem 1.25rem;
+  border-radius: 12px;
+  background: rgba(22, 33, 62, 0.96);
+  border: 1px solid rgba(74, 144, 217, 0.5);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-size: 0.95rem;
+  text-align: center;
+  animation: toast-in 0.2s ease-out;
+}
+
+.toast.error {
+  border-color: rgba(231, 76, 60, 0.6);
+  color: #FF8A80;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 0.5rem); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 
 .hidden-input {
