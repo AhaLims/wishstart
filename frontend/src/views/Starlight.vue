@@ -103,11 +103,16 @@
             <span v-else class="sprite-placeholder">🔮</span>
           </div>
           <div class="result-info">
-            <div class="result-name">{{ displayName(result.spirit) }}</div>
+            <div class="result-name">
+              <span v-if="result.spirit.isShiny" class="shiny-mark" title="异色">
+                <img class="shiny-ico" :src="shinyIcon" alt="异色" />
+              </span>
+              {{ displayName(result.spirit) }}
+            </div>
             <div class="result-star number">
               +{{ result.earned }} <span class="result-unit">星光值</span>
-              <span v-if="result.spirit.starMultiplier > 1" class="star-boost" :title="BOOST_TITLE">
-                ×{{ result.spirit.starMultiplier }}
+              <span v-if="result.spirit.starMultiplier > 1" class="star-boost" :title="boostTitle(result.spirit)">
+                {{ baseStar(result.spirit) }}×{{ result.spirit.starMultiplier }}
               </span>
             </div>
             <div class="result-no">No.{{ result.spirit.number }}</div>
@@ -142,13 +147,15 @@
                :alt="displayName(sprite)" @error="markCardBroken(sprite)" />
           <span v-else class="sprite-placeholder">🔮</span>
           <span class="sprite-no">{{ sprite.number }}</span>
-          <span v-if="sprite.isShiny" class="sprite-shiny" title="异色">✨</span>
+          <span v-if="sprite.isShiny" class="sprite-shiny shiny-mark" title="异色">
+            <img class="shiny-ico" :src="shinyIcon" alt="异色" />
+          </span>
         </div>
         <div class="sprite-name">{{ displayName(sprite) }}</div>
         <div class="sprite-star number">
           ★ {{ sprite.star }}
-          <span v-if="sprite.starMultiplier > 1" class="star-boost" :title="BOOST_TITLE">
-            ×{{ sprite.starMultiplier }}
+          <span v-if="sprite.starMultiplier > 1" class="star-boost" :title="boostTitle(sprite)">
+            {{ baseStar(sprite) }}×{{ sprite.starMultiplier }}
           </span>
         </div>
       </button>
@@ -221,6 +228,9 @@
         </div>
 
         <h3 class="spirit-name">
+          <span v-if="detail.isShiny" class="shiny-mark" title="异色">
+            <img class="shiny-ico" :src="shinyIcon" alt="异色" />
+          </span>
           {{ detail.name }}<span v-if="detail.isShiny" class="spirit-shiny-word">（异色）</span>
         </h3>
         <div class="spirit-no">No.{{ detail.number }}</div>
@@ -235,8 +245,8 @@
 
         <div class="spirit-star number">
           ★ {{ detail.star }}<span class="spirit-star-unit">星光值</span>
-          <span v-if="detail.starMultiplier > 1" class="star-boost" :title="BOOST_TITLE">
-            ×{{ detail.starMultiplier }}
+          <span v-if="detail.starMultiplier > 1" class="star-boost" :title="boostTitle(detail)">
+            基础 {{ baseStar(detail) }} ×{{ detail.starMultiplier }}
           </span>
         </div>
 
@@ -251,6 +261,10 @@
 import { ref, computed, onMounted } from 'vue'
 import { useUserStore } from '../stores/user'
 import { starlightApi } from '../api'
+// wiki 上标「异色外观」的那个小图标（57×56）。
+// 详情页立绘切换那一排 tab 里就有它，193 只异色共用同一张 —— 所以它才是
+// 「这只是异色」的官方标志，不是各写各的 emoji。见 docs/核心功能 7.8。
+import shinyIcon from '../assets/shiny-icon.png'
 
 const userStore = useUserStore()
 
@@ -326,8 +340,16 @@ const displayName = (sprite) => (sprite.isShiny ? `${sprite.name}（异色）` :
 
 // 异色 / 地区形态 / 首领化抽到时星光值翻倍，后端在 starMultiplier 里给（1 或 2）。
 // 前端只管显示，判据留在后端一处，免得两边规则各写一遍再慢慢走偏。
-// 倍数是后端算的，这里只写这句说明。
-const BOOST_TITLE = '异色 / 特殊形态，星光值翻倍'
+//
+// 卡片上那个数是**加完加成**的数（蹦蹦果基础 60，卡上显示 120）。
+// 旁边必须再标一下基础值，写成「60×2」——只写个「×2」会被读成
+// 「120 再翻倍 = 240」，图鉴上明明写的是 60。
+// 基础值从 star 倒推就够，不用后端多发一个字段：倍数是后端按同一套规则算的，
+// 除回去一定等于当初拿来算的那个数。
+const baseStar = (sprite) => Math.round(sprite.star / (sprite.starMultiplier || 1))
+
+const boostTitle = (sprite) =>
+  `基础星光值 ${baseStar(sprite)}，${sprite.formLabel || '特殊形态'} ×${sprite.starMultiplier}，共 ${sprite.star} 星光值`
 
 const showModal = ref(false)
 const editingId = ref('')
@@ -703,6 +725,14 @@ onMounted(fetchState)
   margin-bottom: 0.25rem;
 }
 
+/* 结果卡名字前面的同一张「异色外观」图标 */
+.result-name .shiny-mark {
+  width: 20px;
+  height: 20px;
+  margin-right: 0.35rem;
+  vertical-align: -4px;
+}
+
 .result-star {
   font-size: 1.35rem;
   color: #7FB2FF;
@@ -760,17 +790,36 @@ onMounted(fetchState)
   transform: translateY(0);
 }
 
-/* 异色角标：异色的名字和头像跟本体逐字一样，只看卡片分不出是哪一只 */
-.sprite-shiny {
+/* 「这只是异色」的官方标志：wiki 上用的小图标（57×56，193 只异色共用同一张）。
+   异色的名字和头像跟本体逐字一样，只看卡片分不出是哪一只，所以得有这个角标。
+
+   两处坑：
+   1. 图标是灰色线稿，直接放深色卡上几乎看不见 → 垫一层金底、把线稿压成深色。
+      但 filter 会连元素**自己的背景**一起算，所以金底必须是外面这层 <span>，
+      把 filter 加在里面的 <img> 上。加到金底上会把金底一起 brightness(0) 压黑。
+   2. 这条 img 规则比下面那条 `.sprite-thumb img` 多一个 class 才压得住它 ——
+      否则缩略图那条 width/height:100% 会把这个角标撑满整格，糊住立绘。 */
+.shiny-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: rgba(255, 215, 0, 0.9);
+}
+
+.shiny-mark img.shiny-ico {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  filter: brightness(0) opacity(0.8);
+}
+
+.sprite-thumb .sprite-shiny {
   position: absolute;
   top: 0;
   right: 0;
-  padding: 1px 6px;
-  border-radius: 6px;
-  background: rgba(255, 215, 0, 0.9);
-  color: #1A1A2E;
-  font-size: 12px;
-  line-height: 1.5;
+  width: 20px;
+  height: 20px;
 }
 
 .sprite-thumb {
@@ -895,6 +944,14 @@ onMounted(fetchState)
 
 .spirit-shiny-word {
   font-size: 0.9rem;
+}
+
+/* 弹窗里同一张「异色外观」图标，跟名字排在一行 */
+.spirit-name .shiny-mark {
+  width: 20px;
+  height: 20px;
+  margin-right: 0.35rem;
+  vertical-align: -4px;
 }
 
 .spirit-no {

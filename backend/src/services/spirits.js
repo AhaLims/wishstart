@@ -31,9 +31,14 @@ const HEADS_URL_PREFIX = `${SPIRITS_URL_PREFIX}/heads`;
 const ART_URL_PREFIX = `${SPIRITS_URL_PREFIX}/art`;
 const SHINY_URL_PREFIX = `${SPIRITS_URL_PREFIX}/shiny`;
 
-// 一路往上都找不到星光值时给这么多 —— 也就是传说精灵那几条整条进化线。
-// 为什么不能给 0：64 只首领化形态**全部**没有星光值，给 0 会让结果卡和流水写成
+// 一路往上都找不到星光值时给这么多。
+//
+// 为什么不能给 0：79 只首领化形态**全部**没有星光值，给 0 会让结果卡和流水写成
 // 「抽到「圣光迪莫」获得 0 星光值」，看起来像坏掉了。
+//
+// 会落到这个兜底的是 57 只，它们是 **wiki 上还没标星光值的那几批**（44 只集中在
+// 编号最大的 443-466，也就是最新那一批），不是「没星光的传说精灵」。等 wiki 补上
+// 重启服务就自动跟着变，这里不用动。
 const STAR_FALLBACK = 80;
 
 // kind 是有损的单值（form 是 "lord|regional" 的会被压成 lord），所以要展示形态
