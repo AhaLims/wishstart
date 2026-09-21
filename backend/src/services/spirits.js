@@ -31,10 +31,10 @@ const HEADS_URL_PREFIX = `${SPIRITS_URL_PREFIX}/heads`;
 const ART_URL_PREFIX = `${SPIRITS_URL_PREFIX}/art`;
 const SHINY_URL_PREFIX = `${SPIRITS_URL_PREFIX}/shiny`;
 
-// 「本来就没有星光值」的实体，在连本体也没值的时候兜底给这么多。
+// 一路往上都找不到星光值时给这么多 —— 也就是传说精灵那几条整条进化线。
 // 为什么不能给 0：64 只首领化形态**全部**没有星光值，给 0 会让结果卡和流水写成
 // 「抽到「圣光迪莫」获得 0 星光值」，看起来像坏掉了。
-const STAR_FLOOR = 16;
+const STAR_FALLBACK = 80;
 
 // kind 是有损的单值（form 是 "lord|regional" 的会被压成 lord），所以要展示形态
 // 必须从原始的 form 字段推，不能从 kind 反推。异色另算，见 formLabelOf()。
@@ -82,24 +82,39 @@ function formLabelOf(raw) {
 // 这只精灵算多少星光值。
 //
 // 关键：starFound 为 false 时 star 字段是占位的 80，不是真值（814 条里有 136 条），
-// 所以必须配 starFound 一起看。这些实体换成本体的值：
-//   - 本体（同编号的默认卡）有星光值 → 用本体的。首领化形态走这条，比如圣光迪莫
-//     按迪莫的 80 算 —— 这是个有依据的数，不是我随手定的。
-//   - 本体也没有（传说精灵整条进化线）→ 保底 16。
-function resolveStar(raw, defaultStarByNumber) {
+// 所以必须配 starFound 一起看，直接读 star 会误判 197 条。
+//
+// 自己没有值的**沿着层级往上找**，用上面那级的：
+//   恶魔狼王（首领化，自己没值）→ 恶魔狼（本体，真值 80）        → 80
+//   恶魔狼王的异色               → 恶魔狼王（没值）→ 恶魔狼（80） → 80
+// 异色跟它普通颜色那版同分，是因为异色挂在那一版底下，往上找自然就找到同一级。
+// 一路到顶都没有值（传说精灵整条进化线）→ STAR_FALLBACK。
+function resolveStar(raw, rawById) {
   if (raw.starFound) {
     const s = parseInt(raw.star);
     if (Number.isFinite(s) && s >= 0) return s;
   }
-  const fallback = defaultStarByNumber.get(String(raw.number));
-  return Number.isFinite(fallback) ? fallback : STAR_FLOOR;
+
+  // guard 防数据里出现环（parentId 互相指）时转不出来
+  let cur = raw;
+  for (let guard = 0; cur && cur.parentId && guard < 16; guard++) {
+    const parent = rawById.get(String(cur.parentId));
+    if (!parent) break;
+    if (parent.starFound) {
+      const s = parseInt(parent.star);
+      if (Number.isFinite(s) && s >= 0) return s;
+    }
+    cur = parent;
+  }
+
+  return STAR_FALLBACK;
 }
 
 // 把一条原始实体压成池子需要的形状；不合法返回 null（丢掉落单的行）
-function normalize(raw, defaultStarByNumber) {
+function normalize(raw, rawById) {
   if (!raw || !raw.id || !raw.number || !raw.name) return null;
 
-  const star = resolveStar(raw, defaultStarByNumber);
+  const star = resolveStar(raw, rawById);
   if (!Number.isFinite(star) || star < 0) return null;
 
   const name = String(raw.name);
@@ -135,18 +150,16 @@ function readSpirits() {
   }
   if (!Array.isArray(arr)) return [];
 
-  // 先把「同编号默认卡的星光值」整张表建出来，归一化时要用它给没有星光值的实体
-  // 兜底。这一步必须先于 normalize，所以不能合并进同一个循环。
-  const defaultStarByNumber = new Map();
+  // 先建一份 id → 原始记录 的表：resolveStar() 要沿着 parentId 往上找，
+  // 所以这一步必须先于 normalize，不能合并进同一个循环。
+  const rawById = new Map();
   for (const raw of arr) {
-    if (!raw || !raw.isDefault || !raw.starFound) continue;
-    const s = parseInt(raw.star);
-    if (Number.isFinite(s) && s >= 0) defaultStarByNumber.set(String(raw.number), s);
+    if (raw && raw.id) rawById.set(String(raw.id), raw);
   }
 
   const byId = new Map();
   for (const raw of arr) {
-    const s = normalize(raw, defaultStarByNumber);
+    const s = normalize(raw, rawById);
     if (s) byId.set(s.id, s);
   }
   return [...byId.values()];
@@ -243,7 +256,7 @@ loadSpirits();
 
 module.exports = {
   DATA_DIR,
-  STAR_FLOOR,
+  STAR_FALLBACK,
   SPIRITS_URL_PREFIX,
   HEADS_URL_PREFIX,
   ART_URL_PREFIX,
