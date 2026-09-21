@@ -7,7 +7,6 @@ import Starlight from './views/Starlight.vue'
 import Wishes from './views/Wishes.vue'
 import Draw from './views/Draw.vue'
 import Stats from './views/Stats.vue'
-import Work from './views/Work.vue'
 import Settings from './views/Settings.vue'
 
 const routes = [
@@ -19,8 +18,10 @@ const routes = [
   { path: '/wishes', component: Wishes },
   { path: '/draw', component: Draw },
   { path: '/stats', component: Stats },
-  { path: '/work', component: Work },
-  { path: '/settings', component: Settings }
+  { path: '/settings', component: Settings },
+  // 兜底：工作时间页删掉后，浏览器历史/收藏里还留着的 /work 会落在这里，
+  // 不然匹配不到路由会渲染成一张空白页。
+  { path: '/:pathMatch(.*)*', redirect: '/' }
 ]
 
 const router = createRouter({

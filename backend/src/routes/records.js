@@ -3,6 +3,31 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { ensureToday, isTimeRecord, diceEarnedFrom } = require('../services/dailyState');
 
+// 工时不单独存，每次从记录现算（所以删记录工时会自动跟着少）。
+// 口径见 docs/核心功能--思考实现系统.md 第 3 条：
+//   - 25min型任务的完成记录，一条算 25 分钟
+//   - 快速记录里标了时间型的，按基础星数折算，1 颗星 = 25 分钟
+//   - 别的时间型任务（比如设成 30 分钟的「运动」）不算工时
+const MINUTES_PER_UNIT = 25;
+
+// 一条记录折算成多少分钟。折算不出来的返回 0。
+function minutesOf(record, taskMinutes) {
+  // 周末加倍是星星奖励翻了倍，不代表多干了一倍的活，
+  // 所以折算要用翻倍前的星数，不然周六的工时会凭空翻倍。
+  const baseStars = record.is_weekend_double
+    ? Math.round((record.stars || 0) / 2)
+    : (record.stars || 0);
+
+  if (record.type === 'quick_time') {
+    return baseStars * MINUTES_PER_UNIT;
+  }
+  if (record.type === 'time_task') {
+    const m = taskMinutes[record.task_id];
+    return m === MINUTES_PER_UNIT ? m : 0;
+  }
+  return 0;
+}
+
 // 快速记录（单次任务）
 // recordType: 'time' 时间型 | 'general' 通用型（不传按通用型）
 router.post('/quick', async (req, res) => {
@@ -107,17 +132,41 @@ router.get('/', async (req, res) => {
 
     const parsedRecords = records.map(r => JSON.parse(r));
 
-    // 统计各时段星星
+    // 只有设成 25 分钟的任务才算工时，所以得先把任务表读出来对一下。
+    // 记录里只存了 task_id，分钟数在任务自己身上。
+    const taskMinutes = {};
+    const taskIds = await req.redis.smembers(`wishstar:tasks:index:${userId}`);
+    for (const id of (taskIds || [])) {
+      const t = await req.redis.hgetall(`wishstar:task:${id}`);
+      const m = parseInt(t && t.minutes_per_complete);
+      if (m) taskMinutes[id] = m;
+    }
+
+    // 统计各时段星星 + 工时
     let totalStars = 0;
     let morningStars = 0;
     let afternoonStars = 0;
     let eveningStars = 0;
+    let totalMinutes = 0;
+    let morningMinutes = 0;
+    let afternoonMinutes = 0;
+    let eveningMinutes = 0;
 
     parsedRecords.forEach(r => {
       totalStars += r.stars;
-      if (r.period === 'morning') morningStars += r.stars;
-      else if (r.period === 'afternoon') afternoonStars += r.stars;
-      else if (r.period === 'evening') eveningStars += r.stars;
+      const mins = minutesOf(r, taskMinutes);
+      totalMinutes += mins;
+
+      if (r.period === 'morning') {
+        morningStars += r.stars;
+        morningMinutes += mins;
+      } else if (r.period === 'afternoon') {
+        afternoonStars += r.stars;
+        afternoonMinutes += mins;
+      } else if (r.period === 'evening') {
+        eveningStars += r.stars;
+        eveningMinutes += mins;
+      }
     });
 
     res.json({
@@ -128,6 +177,10 @@ router.get('/', async (req, res) => {
         morningStars,
         afternoonStars,
         eveningStars,
+        totalMinutes,
+        morningMinutes,
+        afternoonMinutes,
+        eveningMinutes,
         records: parsedRecords
       }
     });

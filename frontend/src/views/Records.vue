@@ -36,6 +36,33 @@
       </div>
     </div>
 
+    <!-- 工时（由记录折算，不单独存） -->
+    <div class="stats-cards time-cards">
+      <div class="stat-card time-card">
+        <div class="stat-label">今日总计时间</div>
+        <div class="stat-value-number time-value">{{ formatMinutes(recordsData.totalMinutes) }}</div>
+        <div class="stat-unit">⏱</div>
+      </div>
+
+      <div class="stat-card time-card">
+        <div class="stat-label">早上</div>
+        <div class="stat-value-number time-value">{{ formatMinutes(recordsData.morningMinutes) }}</div>
+        <div class="stat-unit">🌅</div>
+      </div>
+
+      <div class="stat-card time-card">
+        <div class="stat-label">下午</div>
+        <div class="stat-value-number time-value">{{ formatMinutes(recordsData.afternoonMinutes) }}</div>
+        <div class="stat-unit">☀️</div>
+      </div>
+
+      <div class="stat-card time-card">
+        <div class="stat-label">晚上</div>
+        <div class="stat-value-number time-value">{{ formatMinutes(recordsData.eveningMinutes) }}</div>
+        <div class="stat-unit">🌙</div>
+      </div>
+    </div>
+
     <!-- 记录列表 -->
     <div v-if="recordsData.records?.length" class="records-list">
       <h2 class="section-title">记录明细</h2>
@@ -77,8 +104,23 @@ const recordsData = ref({
   morningStars: 0,
   afternoonStars: 0,
   eveningStars: 0,
+  // 工时由后端从记录折算，不单独存
+  totalMinutes: 0,
+  morningMinutes: 0,
+  afternoonMinutes: 0,
+  eveningMinutes: 0,
   records: []
 })
+
+// 工时统一显示成「多少h多少min」，跟需求里写的一致。
+// 不足一小时只说分钟，整点不带尾巴（1h15min / 1h / 25min / 0min）。
+const formatMinutes = (minutes) => {
+  const total = Math.max(0, Math.floor(minutes || 0))
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  if (h > 0) return m > 0 ? `${h}h${m}min` : `${h}h`
+  return `${m}min`
+}
 
 const fetchRecords = async () => {
   try {
@@ -148,6 +190,18 @@ onMounted(() => {
   grid-template-columns: repeat(4, 1fr);
   gap: 1rem;
   margin-bottom: 2rem;
+}
+
+/* 工时那一排贴着星星那一排，所以自己不带下边距 */
+.time-cards {
+  margin-top: -1rem;
+}
+
+/* 工时是「1h15min」这种字符串，比纯数字长，字号得压一点才不撑破卡片 */
+.time-card .time-value {
+  font-size: 1.7rem;
+  font-weight: 700;
+  color: #7FB2FF;
 }
 
 .stat-card {

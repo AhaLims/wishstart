@@ -27,12 +27,8 @@
 
           <div class="task-progress">
             <template v-if="task.task_type === 'time'">
-              <!-- 网页端没有计时器，别承诺「自动完成」，只能说这个数字是几次 -->
-              <span v-if="desktop">每 {{ task.minutes_per_complete }} 分钟自动完成 1 次</span>
-              <span v-else>每 {{ task.minutes_per_complete }} 分钟算 1 次</span>
-              <span v-if="desktop && workProgress[task.id]">
-                （今日已工作 {{ workProgress[task.id].totalMinutes }} 分钟，自动完成 {{ workProgress[task.id].earned }} 次）
-              </span>
+              <!-- 没有计时器了，完成全靠手动点，所以只能说这个数字是几次 -->
+              <span>每 {{ task.minutes_per_complete }} 分钟算 1 次</span>
             </template>
             <span v-else-if="task.max_complete > 0">
               已完成 {{ task.current_complete }} / {{ task.max_complete }} 次
@@ -49,7 +45,7 @@
 
         <div class="task-actions">
           <button
-            v-if="task.status !== 'finished' && (task.task_type !== 'time' || !desktop)"
+            v-if="task.status !== 'finished'"
             class="btn btn-success"
             @click="completeTask(task.id)"
           >
@@ -84,13 +80,13 @@
             </label>
             <label class="radio-label">
               <input type="radio" value="time" v-model="newTask.taskType" />
-              ⏱ 时间型（{{ desktop ? '按工作分钟数自动完成' : '按分钟数记次数，手动完成' }}）
+              ⏱ 时间型（按分钟数记次数，手动完成）
             </label>
           </div>
         </div>
 
         <div class="form-group" v-if="newTask.taskType === 'time'">
-          <label class="label">{{ desktop ? '工作多少分钟自动完成 1 次' : '工作多少分钟算 1 次' }}</label>
+          <label class="label">工作多少分钟算 1 次</label>
           <input v-model.number="newTask.minutesPerComplete" type="number" min="1" class="input" />
         </div>
 
@@ -134,19 +130,11 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useUserStore } from '../stores/user'
-import { taskApi, workApi } from '../api'
-import { isDesktop } from '../utils/env'
+import { taskApi } from '../api'
 
 const userStore = useUserStore()
 const tasks = ref([])
 const showAddModal = ref(false)
-
-// 时间型任务靠计时器自动结算，而计时器只有桌面端有。
-// 网页端没有这个能力，所以时间型任务在网页端必须保留手动完成按钮，
-// 文案也不能写成「自动完成」—— 否则就是个点不动的死任务。
-const desktop = isDesktop()
-
-const workProgress = ref({})
 
 const newTask = ref({
   name: '',
@@ -165,21 +153,6 @@ const fetchTasks = async () => {
     }
   } catch (error) {
     console.error('Fetch tasks error:', error)
-  }
-}
-
-const fetchWorkProgress = async () => {
-  try {
-    const res = await workApi.getToday(userStore.userId)
-    if (res.code === 0) {
-      const map = {}
-      res.data.timeTasks.forEach(t => {
-        map[t.taskId] = { totalMinutes: t.totalMinutes, earned: t.earned }
-      })
-      workProgress.value = map
-    }
-  } catch (error) {
-    console.error('Fetch work progress error:', error)
   }
 }
 
@@ -277,7 +250,6 @@ const deleteTask = async (taskId) => {
 
 onMounted(() => {
   fetchTasks()
-  fetchWorkProgress()
 })
 </script>
 

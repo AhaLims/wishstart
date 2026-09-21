@@ -9,7 +9,6 @@ const diceRoutes = require('./routes/dice');
 const wishRoutes = require('./routes/wishes');
 const drawRoutes = require('./routes/draws');
 const statsRoutes = require('./routes/stats');
-const workRoutes = require('./routes/work');
 const starlightRoutes = require('./routes/starlight');
 const syncRoutes = require('./routes/sync');
 const { setUploadsDir, getUploadsDir } = require('./services/wishImage');
@@ -47,7 +46,6 @@ function createApp({ store, serveStatic, staticDir, uploadsDir }) {
   app.use('/api/v1/wishes', wishRoutes);
   app.use('/api/v1/draws', drawRoutes);
   app.use('/api/v1/stats', statsRoutes);
-  app.use('/api/v1/work', workRoutes);
   app.use('/api/v1/starlight', starlightRoutes);
   app.use('/api/v1/sync', syncRoutes);
 
