@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { ensureToday, isTimeRecord, diceEarnedFrom } = require('../services/dailyState');
+const { getPeriod } = require('../services/completions');
 
 // 工时不单独存，每次从记录现算（所以删记录工时会自动跟着少）。
 // 口径见 docs/核心功能--思考实现系统.md 第 3 条：
@@ -43,7 +44,6 @@ router.post('/quick', async (req, res) => {
     const now = new Date();
     const date = now.toISOString().split('T')[0];
     const timestamp = now.getTime();
-    const hour = now.getHours();
 
     // 周末加倍
     let starsEarned = parseInt(stars);
@@ -77,10 +77,7 @@ router.post('/quick', async (req, res) => {
     }
 
     // 记录到每日记录（使用北京时间）
-    const beijingHour = (hour + 8) % 24;
-    let period = 'morning';
-    if (beijingHour >= 13 && beijingHour < 18) period = 'afternoon';
-    else if (beijingHour >= 18) period = 'evening';
+    const period = getPeriod(now);
 
     const record = {
       id: uuidv4(),
@@ -142,30 +139,49 @@ router.get('/', async (req, res) => {
       if (m) taskMinutes[id] = m;
     }
 
-    // 统计各时段星星 + 工时
+    // 时段一律**按 created_at 现算**，不信记录里存的那个 period 字段。
+    //
+    // 存的那份是写入当时的快照，而历史上有过两种算法（见 completions.js 的
+    // getPeriod 注释），凌晨和晚上的记录都被判错过；现算顺带把老数据也修正过来。
+    // 只写不读，那个字段就退化成排查问题时看的原始值。
+    // 没存 created_at 的老记录退回用存的那份，再没有就归「其他」。
+    const periodOf = (r) => (r.created_at ? getPeriod(new Date(r.created_at)) : (r.period || 'other'));
+
+    // 统计各时段星星 + 工时。「其他」（0-6 点）单列一格
     let totalStars = 0;
     let morningStars = 0;
     let afternoonStars = 0;
     let eveningStars = 0;
+    let otherStars = 0;
     let totalMinutes = 0;
     let morningMinutes = 0;
     let afternoonMinutes = 0;
     let eveningMinutes = 0;
 
     parsedRecords.forEach(r => {
+      // 回填到记录本身上：明细里显示的时段跟上面统计用的必须是同一个，
+      // 不然会出现「明细写早上、但计进了其他」这种对不上的情况
+      const period = periodOf(r);
+      r.period = period;
+
       totalStars += r.stars;
       const mins = minutesOf(r, taskMinutes);
       totalMinutes += mins;
 
-      if (r.period === 'morning') {
+      if (period === 'morning') {
         morningStars += r.stars;
         morningMinutes += mins;
-      } else if (r.period === 'afternoon') {
+      } else if (period === 'afternoon') {
         afternoonStars += r.stars;
         afternoonMinutes += mins;
-      } else if (r.period === 'evening') {
+      } else if (period === 'evening') {
         eveningStars += r.stars;
         eveningMinutes += mins;
+      } else {
+        // 其他时段只有星星，工时**不给**（页面上那一格是空的）。
+        // 不是漏写：0-6 点的工时折算口径还没定，与其显示一个没人认领的数字，
+        // 不如空着。totalMinutes 照旧含它，所以三段加起来可能比总计少。
+        otherStars += r.stars;
       }
     });
 
@@ -177,6 +193,7 @@ router.get('/', async (req, res) => {
         morningStars,
         afternoonStars,
         eveningStars,
+        otherStars,
         totalMinutes,
         morningMinutes,
         afternoonMinutes,

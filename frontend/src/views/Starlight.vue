@@ -10,6 +10,12 @@
         <div class="overview-value number">
           {{ state.banked }}<span class="overview-unit">颗</span>
         </div>
+        <!-- 待入库那一整块排在任务列表下面，不往下滚是看不见的 ——
+             只在这张卡上看到「总数 12」会以为凝出来的星星少了。
+             这里补一行，数字旁边就能对上账；收星星还是去下面那块点 -->
+        <div v-if="state.pending > 0" class="overview-pending">
+          另有 <b class="number">{{ state.pending }}</b> 颗待入库
+        </div>
       </div>
     </div>
 
@@ -109,6 +115,8 @@
               </span>
               {{ displayName(result.spirit) }}
             </div>
+            <!-- 只有这里写**实际进账**的数（+120），跟小卡片 / 弹窗上的 ★ 60 故意不一样：
+                 这句是个 `+N` 的记账，写基础值等于报错账。后面那个 60×2 就是给人对账用的 -->
             <div class="result-star number">
               +{{ result.earned }} <span class="result-unit">星光值</span>
               <span v-if="result.spirit.starMultiplier > 1" class="star-boost" :title="boostTitle(result.spirit)">
@@ -152,10 +160,13 @@
           </span>
         </div>
         <div class="sprite-name">{{ displayName(sprite) }}</div>
+        <!-- 这里显示的是**基础值**（60），加成靠后面那个 ×2 表示。
+             小卡片放不下「★ 120 基础 60×2」那么长的两截数字，而且一格里出现
+             两个数反而要对半天。实际进账的数（120）鼠标停上去就有。 -->
         <div class="sprite-star number">
-          ★ {{ sprite.star }}
+          ★ {{ baseStar(sprite) }}
           <span v-if="sprite.starMultiplier > 1" class="star-boost" :title="boostTitle(sprite)">
-            {{ baseStar(sprite) }}×{{ sprite.starMultiplier }}
+            ×{{ sprite.starMultiplier }}
           </span>
         </div>
       </button>
@@ -243,10 +254,12 @@
           <span v-if="detail.season" class="spirit-tag">{{ detail.season }}</span>
         </div>
 
+        <!-- 弹窗里也跟小卡片一样显示基础值 + ×2，两处对得上
+             （弹窗写 120、卡片写 60 的话，又得解释一遍为什么不是一个数） -->
         <div class="spirit-star number">
-          ★ {{ detail.star }}<span class="spirit-star-unit">星光值</span>
+          ★ {{ baseStar(detail) }}<span class="spirit-star-unit">星光值</span>
           <span v-if="detail.starMultiplier > 1" class="star-boost" :title="boostTitle(detail)">
-            基础 {{ baseStar(detail) }} ×{{ detail.starMultiplier }}
+            ×{{ detail.starMultiplier }}
           </span>
         </div>
 
@@ -341,15 +354,15 @@ const displayName = (sprite) => (sprite.isShiny ? `${sprite.name}（异色）` :
 // 异色 / 地区形态 / 首领化抽到时星光值翻倍，后端在 starMultiplier 里给（1 或 2）。
 // 前端只管显示，判据留在后端一处，免得两边规则各写一遍再慢慢走偏。
 //
-// 卡片上那个数是**加完加成**的数（蹦蹦果基础 60，卡上显示 120）。
-// 旁边必须再标一下基础值，写成「60×2」——只写个「×2」会被读成
-// 「120 再翻倍 = 240」，图鉴上明明写的是 60。
-// 基础值从 star 倒推就够，不用后端多发一个字段：倍数是后端按同一套规则算的，
+// 卡片和弹窗上那行 `★` 显示的是**基础值**（蹦蹦果 60），加成靠后面那个 ×2 表示。
+// 记录里存的 star 是加完加成的数（120），所以要知道基础值得除回去。
+// 除回去就够，不用后端多发一个字段：倍数是后端按同一套规则算的，
 // 除回去一定等于当初拿来算的那个数。
 const baseStar = (sprite) => Math.round(sprite.star / (sprite.starMultiplier || 1))
 
+// 屏幕上只剩基础值了，实际进账多少就靠这句：鼠标停在小标上能看全。
 const boostTitle = (sprite) =>
-  `基础星光值 ${baseStar(sprite)}，${sprite.formLabel || '特殊形态'} ×${sprite.starMultiplier}，共 ${sprite.star} 星光值`
+  `基础星光值 ${baseStar(sprite)}，${sprite.formLabel || '特殊形态'} ×${sprite.starMultiplier}，本次获得 ${sprite.star} 星光值`
 
 const showModal = ref(false)
 const editingId = ref('')
@@ -548,6 +561,18 @@ onMounted(fetchState)
   margin-left: 0.35rem;
   color: #B0B0B0;
   text-shadow: none;
+}
+
+/* 「另有 N 颗待入库」。总数旁边的一行小字，不抢主数字 */
+.overview-pending {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+  color: #B0B0B0;
+}
+
+.overview-pending b {
+  font-size: 1rem;
+  color: #FFD700;
 }
 
 .pending-card {
@@ -871,7 +896,8 @@ onMounted(fetchState)
   margin-bottom: 2rem;
 }
 
-/* 形态加成的「×2」小标。星光值是翻倍后的数，不标一下对照图鉴会以为算错了 */
+/* 形态加成的「×2」小标。`★` 上写的是图鉴基础值，这个标说明进账还要再翻一倍，
+   不然用户会以为拿到的就是 60。实际到手多少在 title 里 */
 .star-boost {
   display: inline-block;
   margin-left: 0.3rem;

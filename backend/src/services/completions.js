@@ -3,12 +3,20 @@
 const { v4: uuidv4 } = require('uuid');
 const { getBeijingHour } = require('./beijingDate');
 
-// 北京时间时段：早上 6-13，下午 13-18，晚上 18-24（核心功能文档口径）
+// 北京时间时段：早上 6-13，下午 13-18，晚上 18-24（核心功能文档口径）。
+// **0-6 点单独算「其他」**，别并进早上或晚上：那一档在页面上是单独一格，
+// 并进去会让「早上」的数字包含凌晨的，对不上。
+//
+// 这是全项目**唯一**的时段判据。以前 routes/records.js 里另有一份，
+// 用的是 `(now.getHours() + 8) % 24` —— 本地时区本来就是 UTC+8 的机器上
+// 等于又加了 8 小时，晚上的记录全被判成早上。两处还都不认识 0-6 点这一档
+// （一份判成早上、一份判成晚上）。以后只留这一份。
 function getPeriod(now = new Date()) {
   const h = getBeijingHour(now);
   if (h >= 6 && h < 13) return 'morning';
   if (h >= 13 && h < 18) return 'afternoon';
-  return 'evening';
+  if (h >= 18) return 'evening';
+  return 'other';
 }
 
 // task: hgetall 返回的任务对象（字符串字段）

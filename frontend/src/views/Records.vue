@@ -34,6 +34,13 @@
         <div class="stat-value number">{{ recordsData.eveningStars }}</div>
         <div class="stat-unit">🌙</div>
       </div>
+
+      <!-- 0-6 点记录的那一档。以前没有这一格，凌晨的星星会被并进早上或晚上 -->
+      <div class="stat-card">
+        <div class="stat-label">其他</div>
+        <div class="stat-value number">{{ recordsData.otherStars }}</div>
+        <div class="stat-unit">🕛</div>
+      </div>
     </div>
 
     <!-- 工时（由记录折算，不单独存） -->
@@ -60,6 +67,16 @@
         <div class="stat-label">晚上</div>
         <div class="stat-value-number time-value">{{ formatMinutes(recordsData.eveningMinutes) }}</div>
         <div class="stat-unit">🌙</div>
+      </div>
+
+      <!-- 「其他」这一格的工时**故意留空**（需求就是这么定的）：
+           0-6 点的工时折算口径还没定，先不显示。
+           里面的 &nbsp; 不能删 —— 空的 div 没有行高，卡片里的 🕛 会往上跑，
+           跟旁边那几张的图标错开一整行 -->
+      <div class="stat-card time-card">
+        <div class="stat-label">其他</div>
+        <div class="stat-value-number time-value">&nbsp;</div>
+        <div class="stat-unit">🕛</div>
       </div>
     </div>
 
@@ -104,6 +121,8 @@ const recordsData = ref({
   morningStars: 0,
   afternoonStars: 0,
   eveningStars: 0,
+  // 0-6 点那一档
+  otherStars: 0,
   // 工时由后端从记录折算，不单独存
   totalMinutes: 0,
   morningMinutes: 0,
@@ -146,7 +165,8 @@ const getPeriodText = (period) => {
   const map = {
     morning: '早上',
     afternoon: '下午',
-    evening: '晚上'
+    evening: '晚上',
+    other: '其他'
   }
   return map[period] || ''
 }
@@ -185,9 +205,12 @@ onMounted(() => {
   width: auto;
 }
 
+/* 两排都是 5 格：今日总计 + 早上 / 下午 / 晚上 / 其他。
+   写死 5 列不用 auto-fit —— 列数一旦跟卡片数对不上，最后一格会孤零零地
+   掉到第二行去，两排就错开了 */
 .stats-cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 1rem;
   margin-bottom: 2rem;
 }
