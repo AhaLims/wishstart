@@ -98,8 +98,8 @@
         <div class="result-title">抽到精灵啦</div>
         <div class="result-body">
           <div class="result-thumb">
-            <img v-if="!broken[result.spirit.id]" :src="result.spirit.headUrl"
-                 :alt="result.spirit.name" @error="markBroken(result.spirit.id)" />
+            <img v-if="!broken[result.spirit.id]" :src="cardImage(result.spirit)"
+                 :alt="displayName(result.spirit)" @error="markCardBroken(result.spirit)" />
             <span v-else class="sprite-placeholder">🔮</span>
           </div>
           <div class="result-info">
@@ -133,11 +133,10 @@
         @click="openDetail(sprite)"
       >
         <div class="sprite-thumb">
-          <img v-if="!broken[sprite.id]" :src="sprite.headUrl"
-               :alt="sprite.name" @error="markBroken(sprite.id)" />
+          <img v-if="!broken[sprite.id]" :src="cardImage(sprite)"
+               :alt="displayName(sprite)" @error="markCardBroken(sprite)" />
           <span v-else class="sprite-placeholder">🔮</span>
           <span class="sprite-no">{{ sprite.number }}</span>
-          <!-- 异色的名字和头像跟本体一模一样，不给个角标就是两只一样的卡片 -->
           <span v-if="sprite.isShiny" class="sprite-shiny" title="异色">✨</span>
         </div>
         <div class="sprite-name">{{ displayName(sprite) }}</div>
@@ -270,8 +269,27 @@ const completingId = ref('')
 // 头像加载失败（图还没拷全）就换成占位符，不显示破图。
 // 按 id 记，不能按编号 —— 同一个编号下有好几只，其中一只缺图不该把另一只也变成占位符。
 const broken = ref({})
-const markBroken = (id) => {
-  broken.value = { ...broken.value, [id]: true }
+const markBroken = (key) => {
+  broken.value = { ...broken.value, [key]: true }
+}
+
+// 卡片上显示哪张图。
+//
+// 异色走**异色立绘**（images/shiny/ 里那张）：wiki 没给异色单独的头部特写，
+// 193 只异色的头像跟本体是同一张，所以卡片上要是也用头像，异色和本体长得一模一样。
+// 立绘只有异色这几张走，其余精灵还是用 11KB 的小头像。
+const cardImage = (sprite) => {
+  if (sprite.isShiny && sprite.artUrl && !broken.value[`${sprite.id}:art`]) return sprite.artUrl
+  return sprite.headUrl
+}
+
+// 异色立绘万一取不到，退回本体的头像（至少还有张图），再不行才是占位符
+const markCardBroken = (sprite) => {
+  if (sprite.isShiny && sprite.artUrl && !broken.value[`${sprite.id}:art`]) {
+    markBroken(`${sprite.id}:art`)
+    return
+  }
+  markBroken(sprite.id)
 }
 
 // 精灵详情弹窗。数据跟着「今日抽到的精灵」一起来，所以这里只是把已经拿到的那条
