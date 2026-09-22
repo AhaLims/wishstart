@@ -2,6 +2,31 @@
   <div class="tasks">
     <h1 class="page-title">任务管理</h1>
 
+    <!-- 完成任务的结果卡。原来这里是一句 alert()，得手点掉才看得见页面，
+         连着完成几个任务就一直被打断。改成跟星光值页一样的内嵌卡：
+         不挡任何操作，几秒后自己淡出。失败也走这张卡（红边），
+         所以这个页面完成任务不会再弹窗 -->
+    <Transition name="result-fade">
+      <div v-if="result" class="card result-card" :class="{ 'result-error': result.error }">
+        <template v-if="result.error">
+          <span class="result-error-text">{{ result.error }}</span>
+        </template>
+        <template v-else>
+          <div class="result-title">任务完成啦</div>
+          <div v-if="result.name" class="result-task">{{ result.name }}</div>
+          <div class="result-rewards">
+            <!-- 星星和「半价抽卡/抽卡」是两类奖励，可能同时有（后台按 rewards 数组给），
+                 所以不是二选一，各自渲染 -->
+            <span v-if="result.stars > 0" class="result-star">
+              ⭐ +{{ result.stars }} 颗星星
+              <span v-if="result.doubled" class="double-mark">周末加倍</span>
+            </span>
+            <span v-for="extra in result.extras" :key="extra" class="reward-tag">{{ extra }}</span>
+          </div>
+        </template>
+      </div>
+    </Transition>
+
     <!-- 添加任务按钮 -->
     <div class="header-actions">
       <button class="btn btn-primary" @click="showAddModal = true">+ 添加任务</button>
@@ -47,9 +72,10 @@
           <button
             v-if="task.status !== 'finished'"
             class="btn btn-success"
+            :disabled="completingId !== ''"
             @click="completeTask(task.id)"
           >
-            完成
+            {{ completingId === task.id ? '完成中...' : '完成' }}
           </button>
           <button class="btn btn-danger" @click="deleteTask(task.id)">删除</button>
         </div>
@@ -136,6 +162,23 @@ const userStore = useUserStore()
 const tasks = ref([])
 const showAddModal = ref(false)
 
+// 完成任务的结果卡（成功或失败），几秒后自己淡出。
+// 计时器存成具名的 let：连着完成几个任务时得把上一个的倒计时清掉，
+// 否则第一张卡的 setTimeout 会把第二张卡提前收走
+const result = ref(null)
+let resultTimer = null
+
+// 正在完成的任务 id（空串 = 没有请求在飞），见 completeTask
+const completingId = ref('')
+
+const showResult = (payload) => {
+  result.value = payload
+  clearTimeout(resultTimer)
+  resultTimer = setTimeout(() => {
+    result.value = null
+  }, 6000)
+}
+
 const newTask = ref({
   name: '',
   taskType: 'general',
@@ -196,42 +239,42 @@ const addTask = async () => {
 }
 
 const completeTask = async (taskId) => {
+  // 正在完成的任务 id（空串 = 没有请求在飞）。
+  // 结果卡是不挡操作的（点「完成」不会被弹窗挡住），所以更得防连点：
+  // 以前那句 alert() 顺带把页面冻住了，等于白捡一道防连点；换成卡片之后
+  // 连点 3 下就是 3 次完成、3 份星星、3 条流水。后端对普通任务没有幂等保护
+  // （maxComplete=0 的本来就能重复完成），第一线只能挡在这里。
+  if (completingId.value) return
+  completingId.value = taskId
+
+  // 先把任务名抓下来：下面 fetchTasks() 会把列表整个换掉，
+  // 等结果卡要显示名字时那个 id 就对不上了
+  const task = tasks.value.find((t) => t.id === taskId)
+
   try {
     const res = await taskApi.completeTask(taskId)
 
     if (res.code === 0) {
-      let message = ''
-      const hasStarsReward = res.data.rewards && res.data.rewards.includes('星星')
-      const hasHalfDrawReward = res.data.rewards && res.data.rewards.includes('半价抽卡')
-      const hasDrawReward = res.data.rewards && res.data.rewards.includes('抽卡')
+      const rewards = res.data.rewards || []
+      const extras = []
+      if (rewards.includes('半价抽卡')) extras.push('半价抽卡')
+      if (rewards.includes('抽卡')) extras.push('抽卡')
 
-      if (res.data.starsEarned > 0) {
-        // 有星星奖励
-        message = `获得 ${res.data.starsEarned} 颗星星！${res.data.isWeekendDouble ? '（周末加倍）' : ''}`
-        // 如果还有其他奖励
-        const otherRewards = []
-        if (hasHalfDrawReward) otherRewards.push('半价抽卡')
-        if (hasDrawReward) otherRewards.push('抽卡')
-        if (otherRewards.length > 0) {
-          message += `，还获得：${otherRewards.join('、')}`
-        }
-      } else if (hasHalfDrawReward || hasDrawReward) {
-        // 只有半价抽卡或抽卡奖励，没有星星
-        const otherRewards = []
-        if (hasHalfDrawReward) otherRewards.push('半价抽卡')
-        if (hasDrawReward) otherRewards.push('抽卡')
-        message = `完成任务！获得：${otherRewards.join('、')}`
-      } else {
-        message = '任务完成！'
-      }
-      alert(message)
+      showResult({
+        name: task ? task.name : '',
+        stars: res.data.starsEarned || 0,
+        doubled: !!res.data.isWeekendDouble,
+        extras
+      })
       await fetchTasks()
       await userStore.fetchStats()
     } else {
-      alert(res.message || '完成失败')
+      showResult({ error: res.message || '完成失败' })
     }
   } catch (error) {
-    alert('完成失败')
+    showResult({ error: '完成失败' })
+  } finally {
+    completingId.value = ''
   }
 }
 
@@ -254,6 +297,72 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* 完成任务的结果卡 */
+.result-card {
+  margin-bottom: 1.5rem;
+  border-color: rgba(46, 204, 113, 0.4);
+}
+
+.result-card.result-error {
+  border-color: rgba(231, 76, 60, 0.4);
+}
+
+.result-error-text {
+  color: #E74C3C;
+  font-weight: 600;
+}
+
+.result-title {
+  font-size: 0.85rem;
+  color: #2ECC71;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.result-task {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-bottom: 0.75rem;
+}
+
+.result-rewards {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.result-star {
+  color: #FFD700;
+  font-weight: 600;
+}
+
+.double-mark {
+  margin-left: 0.25rem;
+  padding: 0.15rem 0.45rem;
+  background: rgba(255, 159, 67, 0.15);
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #FF9F43;
+}
+
+/* 进出场。**淡出（0.6s）故意比淡入（0.3s）慢**：「渐进式消失」，
+   不是 6 秒一到啪一下没了 */
+.result-fade-enter-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.result-fade-leave-active {
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.result-fade-enter-from,
+.result-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
 .header-actions {
   margin-bottom: 1.5rem;
 }

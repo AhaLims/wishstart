@@ -95,41 +95,43 @@
     </div>
 
     <!-- 抽到精灵的结果卡：不挡操作，几秒后自己淡出 -->
-    <div v-if="result" class="card result-card" :class="{ 'result-error': result.error }">
-      <template v-if="result.error">
-        <span class="result-error-text">{{ result.error }}</span>
-      </template>
-      <template v-else>
-        <div class="result-title">抽到精灵啦</div>
-        <div class="result-body">
-          <div class="result-thumb">
-            <img v-if="!broken[result.spirit.id]" :src="cardImage(result.spirit)"
-                 :alt="displayName(result.spirit)" @error="markCardBroken(result.spirit)" />
-            <span v-else class="sprite-placeholder">🔮</span>
-          </div>
-          <div class="result-info">
-            <div class="result-name">
-              <span v-if="result.spirit.isShiny" class="shiny-mark" title="异色">
-                <img class="shiny-ico" :src="shinyIcon" alt="异色" />
-              </span>
-              {{ displayName(result.spirit) }}
+    <Transition name="result-fade">
+      <div v-if="result" class="card result-card" :class="{ 'result-error': result.error }">
+        <template v-if="result.error">
+          <span class="result-error-text">{{ result.error }}</span>
+        </template>
+        <template v-else>
+          <div class="result-title">抽到精灵啦</div>
+          <div class="result-body">
+            <div class="result-thumb">
+              <img v-if="!broken[result.spirit.id]" :src="cardImage(result.spirit)"
+                   :alt="displayName(result.spirit)" @error="markCardBroken(result.spirit)" />
+              <span v-else class="sprite-placeholder">🔮</span>
             </div>
-            <!-- 只有这里写**实际进账**的数（+120），跟小卡片 / 弹窗上的 ★ 60 故意不一样：
-                 这句是个 `+N` 的记账，写基础值等于报错账。后面那个 60×2 就是给人对账用的 -->
-            <div class="result-star number">
-              +{{ result.earned }} <span class="result-unit">星光值</span>
-              <span v-if="result.spirit.starMultiplier > 1" class="star-boost" :title="boostTitle(result.spirit)">
-                {{ baseStar(result.spirit) }}×{{ result.spirit.starMultiplier }}
-              </span>
+            <div class="result-info">
+              <div class="result-name">
+                <span v-if="result.spirit.isShiny" class="shiny-mark" title="异色">
+                  <img class="shiny-ico" :src="shinyIcon" alt="异色" />
+                </span>
+                {{ displayName(result.spirit) }}
+              </div>
+              <!-- 只有这里写**实际进账**的数（+120），跟小卡片 / 弹窗上的 ★ 60 故意不一样：
+                   这句是个 `+N` 的记账，写基础值等于报错账。后面那个 60×2 就是给人对账用的 -->
+              <div class="result-star number">
+                +{{ result.earned }} <span class="result-unit">星光值</span>
+                <span v-if="result.spirit.starMultiplier > 1" class="star-boost" :title="boostTitle(result.spirit)">
+                  {{ baseStar(result.spirit) }}×{{ result.spirit.starMultiplier }}
+                </span>
+              </div>
+              <div class="result-no">No.{{ result.spirit.number }}</div>
             </div>
-            <div class="result-no">No.{{ result.spirit.number }}</div>
           </div>
-        </div>
-        <p v-if="result.condensedNow > 0" class="result-condense">
-          这一下刚好够档位，自动凝结出 {{ result.condensedNow }} 颗许愿星（消耗 {{ result.spentNow }} 星光值）
-        </p>
-      </template>
-    </div>
+          <p v-if="result.condensedNow > 0" class="result-condense">
+            这一下刚好够档位，自动凝结出 {{ result.condensedNow }} 颗许愿星（消耗 {{ result.spentNow }} 星光值）
+          </p>
+        </template>
+      </div>
+    </Transition>
 
     <!-- 今日抽到的精灵 -->
     <div class="section-head">
@@ -695,7 +697,23 @@ onMounted(fetchState)
 .result-card {
   margin-bottom: 1.5rem;
   border-color: rgba(46, 204, 113, 0.4);
-  animation: fadeIn 0.3s ease;
+}
+
+/* 进出场。原来只有 `animation: fadeIn`，也就是只淡入 —— 6 秒到点是 v-if
+   直接把节点摘掉，啪一下消失。改用 Transition，**淡出（0.6s）比淡入（0.3s）慢**，
+   才是「渐进式消失」 */
+.result-fade-enter-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.result-fade-leave-active {
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.result-fade-enter-from,
+.result-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
 }
 
 .result-card.result-error {
