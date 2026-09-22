@@ -56,8 +56,12 @@ export const wishApi = {
   updateWish: (wishId, data) => api.put(`/wishes/${wishId}`, data),
   deleteWish: (wishId) => api.delete(`/wishes/${wishId}`),
   completeWish: (wishId) => api.post(`/wishes/${wishId}/complete`),
-  // 实现通用愿望：起个名字 + 消耗指定数量的碎片，实现出来的会进「已完成」
-  realizeWish: (wishId, fragments, name) => api.post(`/wishes/${wishId}/realize`, { fragments, name })
+  // 转换通用愿望的碎片，两个出口共用这一块弹窗：
+  // - realize：实现新愿望，起个名字 + 消耗指定数量的碎片，出来的会进「已完成」
+  // - transfer：把碎片转给某个还没集满的普通愿望（补它缺的那几个），上限是目标的缺口
+  realizeWish: (wishId, fragments, name) => api.post(`/wishes/${wishId}/realize`, { fragments, name }),
+  transferFragments: (wishId, targetWishId, fragments) =>
+    api.post(`/wishes/${wishId}/transfer`, { targetWishId, fragments })
 }
 
 // 抽卡API

@@ -11,6 +11,7 @@ const {
   priceToFragments,
   fragmentsToPrice,
   getWishPrice,
+  formatFragments,
   buildRealizedWish,
   ensureWishFresh,
   ensureWishFreshAll,
@@ -172,7 +173,16 @@ router.put('/:wishId', async (req, res) => {
       if (isClosed) {
         return res.json({ code: 1, message: '愿望已结束，无法修改碎片数量' });
       }
-      updates.current_fragments = currentFragments.toString();
+      // 至少挡住负数和非数字。这两个写进去是**没法自愈**的：
+      // 负数会让进度条算成负的，而且 isWishFull 永远为 false，那个愿望
+      // 既合不成、抽卡也还会一直抽到它。
+      // 上界**故意不夹**：填超了会走下面「已经够数」那段自动转成 ready，
+      // 本来就是自愈的，再夹一次反而会让「调低价格 → 退回收集」那段逻辑打架。
+      const parsedCurrent = parseInt(currentFragments, 10);
+      if (Number.isNaN(parsedCurrent) || parsedCurrent < 0) {
+        return res.json({ code: 1, message: '碎片数量不能是负数' });
+      }
+      updates.current_fragments = parsedCurrent.toString();
     }
 
     if (name) updates.name = name;
@@ -409,6 +419,118 @@ router.post('/:wishId/realize', async (req, res) => {
           consumed: amount,
           currentFragments: after,
           realizeCount: parseInt(latest.realize_count, 10) || 0
+        }
+      };
+    });
+
+    if (result.error) {
+      return res.json({ code: 1, message: result.error });
+    }
+    res.json({ code: 0, data: result.data });
+  } catch (error) {
+    res.status(500).json({ code: 1, message: error.message });
+  }
+});
+
+// 把碎片从通用愿望转给某个还没集满的普通愿望。
+//
+// 为什么需要它：普通愿望的碎片只能靠抽卡加，而抽卡是从所有未集满的愿望里**随机**
+// 抽一个 —— 一个差一颗的愿望只能干等运气。通用愿望是个能一直攒的桶，于是把桶里的
+// 碎片定向挪一颗过去就成了补这个缺口的唯一办法（「补记碎片」只能补当前那张卡，
+// 挪不动别的愿望的缺口）。
+//
+// 上限卡两处：目标的缺口（补超了就溢出成负缺口）和通用愿望的当前持有量。
+// 补满的那一刻走 markWishReady，跟抽卡补满是同一个转换点，不另写一遍。
+router.post('/:wishId/transfer', async (req, res) => {
+  try {
+    const { wishId } = req.params;
+    const { targetWishId, fragments } = req.body;
+
+    const existing = await req.redis.hgetall(`${PREFIX}:${wishId}`);
+    if (!existing || !existing.id) {
+      return res.status(404).json({ code: 1, message: '愿望不存在' });
+    }
+
+    if (!isGeneralWish(existing)) {
+      return res.json({ code: 1, message: '只有通用愿望可以转出碎片' });
+    }
+
+    if (!targetWishId) {
+      return res.json({ code: 1, message: '请选择要补充碎片的愿望' });
+    }
+    if (targetWishId === wishId) {
+      return res.json({ code: 1, message: '不能补充给通用愿望自己' });
+    }
+
+    const amount = Number(fragments);
+    if (!Number.isInteger(amount) || amount < 1) {
+      return res.json({ code: 1, message: '请输入要补充的碎片数量' });
+    }
+
+    // 「读当前碎片 → 判断够不够 → 扣掉」串行。理由跟上面 realize 那条一样：
+    // 中间隔着 await，不锁的话连点两下会双双读到同一份碎片、双双判定够用，
+    // 扣出负数还多加一倍碎片给目标。
+    const result = await withLock(`wish-transfer:${wishId}`, async () => {
+      const from = await req.redis.hgetall(`${PREFIX}:${wishId}`);
+      const fromCurrent = getCurrentFragments(from);
+      if (amount > fromCurrent) {
+        return { error: `碎片不足，通用愿望当前只有${fromCurrent}个碎片` };
+      }
+
+      const target = await req.redis.hgetall(`${PREFIX}:${targetWishId}`);
+      if (!target || !target.id) {
+        return { error: '要补充的愿望不存在' };
+      }
+      if (isGeneralWish(target)) {
+        return { error: '不能补充给通用愿望自己' };
+      }
+
+      // 状态先刷新：可能刚好在打开弹窗这段时间里过期了
+      const fresh = await ensureWishFresh(req.redis, target, Date.now());
+      if (fresh.status !== 'collecting') {
+        return { error: '只能补充给正在收集中的愿望' };
+      }
+
+      const deficit = getTotalFragments(fresh) - getCurrentFragments(fresh);
+      if (deficit <= 0) {
+        return { error: `「${fresh.name}」已经集满了，不用再补` };
+      }
+      if (amount > deficit) {
+        return { error: `「${fresh.name}」还差${deficit}个碎片，补多了就超了` };
+      }
+
+      const now = Date.now();
+
+      const after = await req.redis.hincrby(`${PREFIX}:${wishId}`, 'current_fragments', -amount);
+      await req.redis.hincrby(`${PREFIX}:${targetWishId}`, 'current_fragments', amount);
+      await req.redis.hset(`${PREFIX}:${targetWishId}`, { updated_at: String(now) });
+
+      // 补满了就直接进「已集满待合成」，有效期从这一刻起算
+      let latestTarget = await req.redis.hgetall(`${PREFIX}:${targetWishId}`);
+      const becameReady = isWishFull(latestTarget);
+      if (becameReady) {
+        latestTarget = await markWishReady(req.redis, latestTarget, now);
+      }
+
+      // 记一条流水。金额记「通用愿望这边少了多少」（-n），描述里写清补给了谁、
+      // 补完是几比几，不然过几天翻流水会看不出这笔记的是什么
+      const log = {
+        id: uuidv4(),
+        type: 'expenditure',
+        category: 'wish_topup',
+        amount: -amount,
+        description: `给「${latestTarget.name}」补充${amount}个碎片` +
+          `（${formatFragments(latestTarget)}），通用愿望剩余${after}个`,
+        created_at: now
+      };
+      await req.redis.zadd(`wishstar:logs:${from.user_id}`, now, JSON.stringify(log));
+
+      return {
+        data: {
+          target: latestTarget,
+          targetReady: becameReady,
+          consumed: amount,
+          currentFragments: after
         }
       };
     });

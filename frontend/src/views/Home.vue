@@ -55,8 +55,10 @@
             🎲 掷骰子
           </button>
 
+          <!-- 没有次数时把「还差多少颗」说出来，不能只写死规则：知道差 2 颗和
+               知道「每 5 颗换 1 次」是两种体感，前者能立刻判断要不要去补一单 -->
           <p v-if="dice.diceCount <= 0" class="roll-note">
-            没有次数了 —— 时间型每 5 颗星星换 1 次
+            没有次数了 —— 还差 <b class="number">{{ starsToNextRoll }}</b> 颗时间型星星换 1 次
           </p>
 
           <!-- 线下补记的入口。**没有次数时也不置灰**，照样点得开 —— 置灰的链接点下去
@@ -146,7 +148,7 @@
         <!-- 没次数时把原因说出来。上面的掷骰子按钮是置灰的，那是看得见的；
              但入口点进来只看见一个灰的「记录」就只剩困惑，所以这里必须解释 -->
         <p v-if="dice.diceCount <= 0" class="modal-warn">
-          没有掷骰子次数了 —— 当日时间型星星每满 5 颗换 1 次，用掉的不退回
+          没有掷骰子次数了 —— 还差 {{ starsToNextRoll }} 颗时间型星星换 1 次，用掉的不退回
         </p>
         <div class="form-group">
           <label class="label">点数（1-6）</label>
@@ -208,6 +210,21 @@ const PIPS = {
 }
 
 const pips = computed(() => PIPS[diceValue.value] || PIPS[1])
+
+// 还差几颗**时间型**星星能换下一次掷骰子次数。
+//
+// 规则跟后端 dailyState.js 的 diceEarnedFrom 必须一致（每满 5 颗换 1 次），
+// 分母 5 是**写死**的：后端没把这个数发给前端（它只发 todayTimeStars），
+// 那边改了这里要跟着改。只有这一个地方用到 5，别的地方别再从这抄一遍。
+//
+// **整除时必须给 5 而不是 0**：正好是 5 的倍数说明那一档的次数已经发过了
+// （而且可能已经花掉，比如攒 10 颗拿 2 次、两次都扔完了），下一次要从头攒 5 颗。
+// 给 0 会显示「还差 0 颗」却扔不了，比不显示还糟。
+const starsToNextRoll = computed(() => {
+  if (dice.value.diceCount > 0) return 0
+  const rest = (dice.value.todayTimeStars || 0) % 5
+  return rest === 0 ? 5 : 5 - rest
+})
 
 // ---- 快速记录的工时预览 ----
 //

@@ -103,12 +103,15 @@
         </div>
 
         <div class="wish-actions">
+          <!-- 「转换」是碎片出口的唯一入口：实现新愿望 / 补充给已有愿望两种模式，
+               都在同一个弹窗里选。不在每张愿望卡上再挂一个「补充碎片」按钮 ——
+               那样碎片有两个出口，迟早长出两套校验 -->
           <button
             class="btn btn-success"
             :disabled="generalCurrent < 1"
-            @click="openRealizeModal"
+            @click="openConvertModal"
           >
-            实现
+            转换
           </button>
           <button
             class="btn btn-primary"
@@ -285,10 +288,6 @@
       </div>
     </div>
 
-    <!-- 补记碎片的结果提示。补记是个可以连着点的动作，用 alert 每点一次弹一次太吵，
-         所以做成一闪而过的提示条，几秒后自己消失 -->
-    <div v-if="notice" class="toast" :class="notice.type">{{ notice.text }}</div>
-
     <!-- 添加愿望弹框 -->
     <div v-if="showAddModal" class="modal-overlay" @click.self="showAddModal = false">
       <div class="modal">
@@ -443,50 +442,124 @@
       </div>
     </div>
 
-    <!-- 实现通用愿望弹框 -->
-    <div v-if="showRealizeModal" class="modal-overlay" @click.self="showRealizeModal = false">
+    <!-- 转换弹框：通用愿望里那些碎片的两个出口，在这个弹窗里二选一 -->
+    <div v-if="showConvertModal" class="modal-overlay" @click.self="closeConvert">
       <div class="modal">
-        <h3 class="modal-title">实现通用愿望</h3>
+        <h3 class="modal-title">转换碎片</h3>
 
-        <div class="form-group">
-          <label class="label">愿望名称</label>
-          <input
-            v-model="realizeName"
-            type="text"
-            class="input"
-            placeholder="这次实现的是什么？"
-            maxlength="30"
-            @keyup.enter="submitRealize"
-          />
-          <p class="form-hint">
-            实现之后它会带着这个名字进「已完成」
-          </p>
+        <p class="modal-sub">通用愿望里现有 {{ generalCurrent }} 个碎片</p>
+
+        <!-- 两个出口长得很像（都是「花掉碎片换点什么」），所以先把这一步说清楚，
+             免得填到一半才发现模式选错了 -->
+        <div class="mode-switch">
+          <button
+            class="mode-btn"
+            :class="{ active: convertMode === 'new' }"
+            @click="convertMode = 'new'"
+          >
+            实现新愿望
+          </button>
+          <button
+            class="mode-btn"
+            :class="{ active: convertMode === 'topup' }"
+            :disabled="!topupTargets.length"
+            @click="convertMode = 'topup'"
+          >
+            补充给已有愿望
+          </button>
         </div>
 
-        <div class="form-group">
-          <label class="label">消耗碎片数量</label>
-          <input
-            v-model.number="realizeAmount"
-            type="number"
-            class="input"
-            :min="1"
-            :max="generalCurrent"
-          />
-          <p class="form-hint">
-            当前持有 {{ generalCurrent }} 个碎片，最多可以全部用完
-          </p>
-        </div>
+        <!-- 模式一：实现新愿望（原来的「实现」，只是换了文案） -->
+        <template v-if="convertMode === 'new'">
+          <div class="form-group">
+            <label class="label">愿望名称</label>
+            <input
+              v-model="convertName"
+              type="text"
+              class="input"
+              placeholder="这次实现的是什么？"
+              maxlength="30"
+              @keyup.enter="submitConvert"
+            />
+            <p class="form-hint">
+              实现之后它会带着这个名字进「已完成」
+            </p>
+          </div>
 
-        <p v-if="realizeError" class="form-error">{{ realizeError }}</p>
+          <div class="form-group">
+            <label class="label">消耗碎片数量</label>
+            <input
+              v-model.number="convertAmount"
+              type="number"
+              class="input"
+              :min="1"
+              :max="generalCurrent"
+            />
+            <p class="form-hint">
+              当前持有 {{ generalCurrent }} 个碎片，最多可以全部用完
+            </p>
+          </div>
+        </template>
+
+        <!-- 模式二：补充给已有愿望。碎片是**转过去**的，通用愿望这边会少 -->
+        <template v-else>
+          <div v-if="!topupTargets.length" class="form-hint">
+            没有可补充的愿望 —— 收集中且还差碎片的普通愿望才会出现在这里
+          </div>
+
+          <template v-else>
+            <div class="form-group">
+              <label class="label">补充给哪个愿望</label>
+              <select v-model="topupTargetId" class="input" @change="onTopupTargetChange">
+                <option v-for="w in topupTargets" :key="w.id" :value="w.id">
+                  {{ w.name }}（还差 {{ topupDeficitOf(w) }} 个碎片）
+                </option>
+              </select>
+              <p class="form-hint">
+                只能补给「收集中且还没集满」的愿望
+              </p>
+            </div>
+
+            <div class="form-group">
+              <label class="label">补充数量</label>
+              <input
+                v-model.number="topupAmount"
+                type="number"
+                class="input"
+                :min="1"
+                :max="topupMax"
+              />
+              <p class="form-hint">
+                「{{ selectedTarget ? selectedTarget.name : '' }}」还差 {{ topupDeficit }} 个，
+                上限 = 缺口和通用愿望持有量里更小的那个（这里最多 {{ topupMax }} 个）。
+                <!-- 补满的那一刻它就直接进「已集满，可以合成」 -->
+                <span v-if="topupAmount >= topupDeficit && topupDeficit > 0">
+                  这一下刚好补满，它可以直接合成啦
+                </span>
+              </p>
+            </div>
+          </template>
+        </template>
+
+        <p v-if="convertError" class="form-error">{{ convertError }}</p>
 
         <div class="modal-actions">
-          <button class="btn btn-primary" :disabled="submittingRealize" @click="submitRealize">
-            {{ submittingRealize ? '实现中...' : '确认实现' }}
+          <button
+            class="btn btn-primary"
+            :disabled="submittingConvert"
+            @click="convertMode === 'new' ? submitConvert() : submitTopup()"
+          >
+            {{ submittingConvert ? '处理中...' : (convertMode === 'new' ? '确认实现' : '确认补充') }}
           </button>
-          <button class="btn" :disabled="submittingRealize" @click="closeRealize">取消</button>
+          <button class="btn" :disabled="submittingConvert" @click="closeConvert">取消</button>
         </div>
       </div>
     </div>
+
+    <!-- 全站共用的下方浮窗（补记碎片 / 转换的结果提示）。
+         原来这里是一段写在本文件 `<style scoped>` 里的 .toast，别的页面用不了，
+         而且只有淡入没有淡出（到点是 v-if 直接摘节点）。提到 components/Toast.vue 了 -->
+    <Toast :notice="notice" />
   </div>
 </template>
 
@@ -494,16 +567,23 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useUserStore } from '../stores/user'
 import { wishApi, drawApi } from '../api'
+import Toast from '../components/Toast.vue'
 
 const userStore = useUserStore()
 const wishes = ref([])
 const showAddModal = ref(false)
 const showEditModal = ref(false)
-const showRealizeModal = ref(false)
-const realizeAmount = ref(1)
-const realizeName = ref('')
-const realizeError = ref('')
-const submittingRealize = ref(false)
+
+// 转换弹窗。'new' = 实现新愿望（碎片换成一条新的已完成愿望），
+// 'topup' = 把碎片转给某个还没集满的普通愿望
+const showConvertModal = ref(false)
+const convertMode = ref('new')
+const convertAmount = ref(1)
+const convertName = ref('')
+const convertError = ref('')
+const submittingConvert = ref(false)
+const topupTargetId = ref('')
+const topupAmount = ref(1)
 
 // 倒计时用的"当前时间"，每秒刷新一次
 const now = ref(Date.now())
@@ -635,6 +715,34 @@ const generalWish = computed(() => wishes.value.find(isGeneralWish) || null)
 const generalCurrent = computed(() => parseInt(generalWish.value?.current_fragments) || 0)
 const generalRealizeCount = computed(() => parseInt(generalWish.value?.realize_count) || 0)
 
+// ---- 转换弹窗的「补充给已有愿望」模式 ----
+
+// 一个愿望还差多少个碎片才集满。通用愿望没有上限，不参与
+const topupDeficitOf = (wish) => {
+  const total = parseInt(wish.total_fragments) || 0
+  const current = parseInt(wish.current_fragments) || 0
+  return Math.max(0, total - current)
+}
+
+// 可被补充的愿望：**收集中且还没集满**的普通愿望。
+// 已集满的（缺口 0，没什么可补）、已过期 / 已完成的（补进去也换不出来）、
+// 以及通用愿望自己（不能自己补自己）都不在候选里。
+// 后端还会再判一遍 —— 这里只是别让用户选到一个点了就报错的东西
+const topupTargets = computed(() =>
+  wishes.value.filter(w =>
+    !isGeneralWish(w) && w.status === 'collecting' && topupDeficitOf(w) > 0
+  )
+)
+
+const selectedTarget = computed(() =>
+  topupTargets.value.find(w => w.id === topupTargetId.value) || null
+)
+
+const topupDeficit = computed(() => (selectedTarget.value ? topupDeficitOf(selectedTarget.value) : 0))
+
+// 上限是**两个数的较小者**：目标的缺口（补超了就溢出成负缺口）和通用愿望的持有量
+const topupMax = computed(() => Math.min(topupDeficit.value, generalCurrent.value))
+
 // 进行中：收集中 + 已集满待合成（不含通用愿望，也不含已过期）
 const activeWishes = computed(() => {
   return wishes.value.filter(w =>
@@ -765,55 +873,118 @@ const completeWish = async (wishId) => {
   }
 }
 
-const openRealizeModal = () => {
-  // 默认填入当前全部碎片，用户可以改小
-  realizeAmount.value = generalCurrent.value
-  realizeName.value = ''
-  realizeError.value = ''
-  showRealizeModal.value = true
+const openConvertModal = () => {
+  // 默认走「实现新愿望」，那是这个功能原来的用法；
+  // 数量默认填入当前全部碎片，用户可以改小
+  convertMode.value = 'new'
+  convertAmount.value = generalCurrent.value
+  convertName.value = ''
+  convertError.value = ''
+
+  // 补碎片那边也预先挑好目标（列表里的第一个）并把数量填满缺口，
+  // 这样切过去就能直接确认，不用再点两下
+  topupTargetId.value = topupTargets.value.length ? topupTargets.value[0].id : ''
+  topupAmount.value = topupMax.value
+
+  showConvertModal.value = true
 }
 
-const closeRealize = () => {
-  if (submittingRealize.value) return
-  showRealizeModal.value = false
+const closeConvert = () => {
+  if (submittingConvert.value) return
+  showConvertModal.value = false
+}
+
+// 换目标愿望时把数量重置成新目标的缺口 —— 不重置的话会留着上一个目标的数，
+// 而那个数可能正好超过新目标的缺口，一点确认就报错
+const onTopupTargetChange = () => {
+  topupAmount.value = topupMax.value
+  convertError.value = ''
 }
 
 // 后端那把锁是主力，这里只是别让手指头把请求打出去
-const submitRealize = async () => {
-  if (submittingRealize.value) return
+const submitConvert = async () => {
+  if (submittingConvert.value) return
 
-  const amount = Number(realizeAmount.value)
-  const name = realizeName.value.trim()
+  const amount = Number(convertAmount.value)
+  const name = convertName.value.trim()
 
   if (!name) {
-    realizeError.value = '请填写这次实现的愿望名称'
+    convertError.value = '请填写这次实现的愿望名称'
     return
   }
   if (!Number.isInteger(amount) || amount < 1) {
-    realizeError.value = '请输入要消耗的碎片数量'
+    convertError.value = '请输入要消耗的碎片数量'
     return
   }
   if (amount > generalCurrent.value) {
-    realizeError.value = `碎片不足，当前只有 ${generalCurrent.value} 个碎片`
+    convertError.value = `碎片不足，当前只有 ${generalCurrent.value} 个碎片`
     return
   }
 
-  realizeError.value = ''
-  submittingRealize.value = true
+  convertError.value = ''
+  submittingConvert.value = true
   try {
     const res = await wishApi.realizeWish(generalWish.value.id, amount, name)
     if (res.code === 0) {
-      showRealizeModal.value = false
+      showConvertModal.value = false
       await fetchWishes()
       await userStore.fetchStats()
-      showNotice(`🎉「${name}」实现啦，已放进已完成 · 消耗 ${amount} 个碎片，还剩 ${res.data.currentFragments} 个`)
+      showNotice({ text: `🎉「${name}」实现啦，已放进已完成 · 消耗 ${amount} 个碎片，还剩 ${res.data.currentFragments} 个` })
     } else {
-      realizeError.value = res.message || '实现失败'
+      convertError.value = res.message || '实现失败'
     }
   } catch (error) {
-    realizeError.value = '实现失败'
+    convertError.value = '实现失败'
   } finally {
-    submittingRealize.value = false
+    submittingConvert.value = false
+  }
+}
+
+// 补充给已有愿望：碎片从通用愿望转过去，补满的那一刻目标直接变成「可以合成」
+const submitTopup = async () => {
+  if (submittingConvert.value) return
+
+  const target = selectedTarget.value
+  if (!target) {
+    convertError.value = '请选择要补充的愿望'
+    return
+  }
+
+  const amount = Number(topupAmount.value)
+  if (!Number.isInteger(amount) || amount < 1) {
+    convertError.value = '请输入要补充的碎片数量'
+    return
+  }
+  if (amount > topupDeficit.value) {
+    convertError.value = `「${target.name}」还差 ${topupDeficit.value} 个碎片，补多了就超了`
+    return
+  }
+  if (amount > generalCurrent.value) {
+    convertError.value = `碎片不足，通用愿望当前只有 ${generalCurrent.value} 个碎片`
+    return
+  }
+
+  convertError.value = ''
+  submittingConvert.value = true
+  try {
+    const res = await wishApi.transferFragments(generalWish.value.id, target.id, amount)
+    if (res.code === 0) {
+      showConvertModal.value = false
+      await fetchWishes()
+      const after = res.data.target
+      const full = res.data.targetReady ? ' · 🎊 集满了，可以合成啦' : ''
+      showNotice({
+        text: `✨ 给「${after.name}」补了 ${amount} 个碎片` +
+          `（${after.current_fragments}/${after.total_fragments}）` +
+          `，通用愿望还剩 ${res.data.currentFragments} 个${full}`
+      })
+    } else {
+      convertError.value = res.message || '补充失败'
+    }
+  } catch (error) {
+    convertError.value = '补充失败'
+  } finally {
+    submittingConvert.value = false
   }
 }
 
@@ -889,12 +1060,14 @@ const updateWish = async () => {
 // 后端 draws.js 里那把 per-user 的锁是第二道（多标签页、慢网络重试也挡得住）
 const recordingId = ref('')
 
-// 一闪而过的提示条
+// 下方浮窗的状态。补记碎片是个可以连着点的动作，用 alert 每点一次弹一次太吵，
+// 所以做成一闪而过的提示条。画的那部分在 components/Toast.vue（三个页面共用），
+// 状态留在各页自己手里 —— 内容差别大，塞进组件反而要开一堆口子
 const notice = ref(null)
 let noticeTimer = null
 
-const showNotice = (text, type = 'success') => {
-  notice.value = { text, type }
+const showNotice = (payload, type = 'success') => {
+  notice.value = { type, ...payload }
   clearTimeout(noticeTimer)
   noticeTimer = setTimeout(() => { notice.value = null }, 3500)
 }
@@ -941,14 +1114,14 @@ const doDraw = async () => {
       // 通用愿望没有上限，不带分母
       const progress = total > 0 ? `${d.currentFragments}/${total}` : `${d.currentFragments}`
       const full = d.isReady ? ' · 🎊 集满了，可以合成啦' : ''
-      showNotice(`抽到「${d.wishName}」碎片（${progress}）${full}`)
+      showNotice({ text: `抽到「${d.wishName}」碎片（${progress}）${full}` })
       await fetchWishes()
       await userStore.fetchStats()
     } else {
-      showNotice(res.message || '抽卡失败', 'error')
+      showNotice({ text: res.message || '抽卡失败' }, 'error')
     }
   } catch (error) {
-    showNotice('抽卡失败', 'error')
+    showNotice({ text: '抽卡失败' }, 'error')
   } finally {
     isDrawing.value = false
   }
@@ -968,14 +1141,14 @@ const recordFragment = async (wish) => {
       // 通用愿望没有上限，不带分母
       const progress = total > 0 ? `${data.currentFragments}/${total}` : `${data.currentFragments}`
       const full = data.isReady ? ' · 🎊 集满了，可以合成啦' : ''
-      showNotice(`「${data.wishName}」+1 碎片（${progress}）· ${drawCostText(data)}${full}`)
+      showNotice({ text: `「${data.wishName}」+1 碎片（${progress}）· ${drawCostText(data)}${full}` })
       await fetchWishes()
       await userStore.fetchStats()
     } else {
-      showNotice(res.message || '补记失败', 'error')
+      showNotice({ text: res.message || '补记失败' }, 'error')
     }
   } catch (error) {
-    showNotice('补记失败', 'error')
+    showNotice({ text: '补记失败' }, 'error')
   } finally {
     recordingId.value = ''
   }
@@ -1345,6 +1518,15 @@ onUnmounted(() => {
   color: #888;
 }
 
+/* 转换弹窗标题下面那行「通用愿望里现有 N 个碎片」——
+   两种模式都要看这个数（实现新愿望看能花多少，补充给已有愿望看够不够挪），
+   所以放在模式切换上面，切模式时不跟着变位置 */
+.modal-sub {
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: #B0B0B0;
+}
+
 .modal-actions {
   display: flex;
   gap: 1rem;
@@ -1414,6 +1596,12 @@ onUnmounted(() => {
   color: #FFF;
 }
 
+/* 「补充给已有愿望」在没有可补的愿望时是灰的（点了也只能看到一句「没有可补充的愿望」） */
+.mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* 图片选择器 */
 .image-picker {
   display: flex;
@@ -1464,33 +1652,8 @@ onUnmounted(() => {
   margin-bottom: 0.5rem;
 }
 
-/* 补记碎片的提示条：固定在底部中间，不挡住卡片，几秒后自己消失 */
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: 2rem;
-  transform: translateX(-50%);
-  z-index: 100;
-  max-width: min(90vw, 480px);
-  padding: 0.85rem 1.25rem;
-  border-radius: 12px;
-  background: rgba(22, 33, 62, 0.96);
-  border: 1px solid rgba(74, 144, 217, 0.5);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  font-size: 0.95rem;
-  text-align: center;
-  animation: toast-in 0.2s ease-out;
-}
-
-.toast.error {
-  border-color: rgba(231, 76, 60, 0.6);
-  color: #FF8A80;
-}
-
-@keyframes toast-in {
-  from { opacity: 0; transform: translate(-50%, 0.5rem); }
-  to { opacity: 1; transform: translate(-50%, 0); }
-}
+/* 这条提示从「只在本页 scoped 的 .toast」提到了 components/Toast.vue，
+   三个页面共用 —— 原来那份只有淡入没有淡出，别的页面也用不了 */
 
 .hidden-input {
   display: none;

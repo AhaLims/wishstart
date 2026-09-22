@@ -97,51 +97,6 @@
       </template>
     </div>
 
-    <!-- 抽到精灵的结果卡：不挡操作，几秒后自己淡出 -->
-    <Transition name="result-fade">
-      <div v-if="result" class="card result-card" :class="{ 'result-error': result.error }">
-        <template v-if="result.error">
-          <span class="result-error-text">{{ result.error }}</span>
-        </template>
-        <template v-else>
-          <div class="result-title">抽到精灵啦</div>
-          <div class="result-body">
-            <div class="result-thumb">
-              <img v-if="!broken[result.spirit.id]" :src="cardImage(result.spirit)"
-                   :alt="displayName(result.spirit)" @error="markCardBroken(result.spirit)" />
-              <span v-else class="sprite-placeholder">🔮</span>
-            </div>
-            <div class="result-info">
-              <div class="result-name">
-                <span v-if="result.spirit.isShiny" class="shiny-mark" title="异色">
-                  <img class="shiny-ico" :src="shinyIcon" alt="异色" />
-                </span>
-                {{ displayName(result.spirit) }}
-              </div>
-              <!-- 只有这里写**实际进账**的数（+24000），跟小卡片 / 弹窗上的
-                   1200×10 故意不一样：这句是个 `+N` 的记账，写基础值等于报错账。
-                   后面那个 1200×10 就是给人对账用的 -->
-              <div class="result-roco number">
-                +{{ result.rocoEarned }} <span class="result-unit">洛克贝</span>
-                <span
-                  v-if="result.spirit.rocoMultiplier > 1"
-                  class="roco-boost"
-                  :title="rocoTitle(result.spirit)"
-                >
-                  {{ baseRoco(result.spirit) }}×{{ result.spirit.rocoMultiplier }}
-                </span>
-              </div>
-              <div class="result-no">No.{{ result.spirit.number }}</div>
-            </div>
-          </div>
-          <!-- 凝结不再写「消耗 N 星光值」：那个数就是星光值，页面上不显示 -->
-          <p v-if="result.condensedNow > 0" class="result-condense">
-            这一下刚好够档位，自动凝结出 {{ result.condensedNow }} 颗许愿星
-          </p>
-        </template>
-      </div>
-    </Transition>
-
     <!-- 今日抽到的精灵 -->
     <div class="section-head">
       <h2 class="section-title">今日抽到的精灵</h2>
@@ -283,13 +238,19 @@
         <p v-else class="spirit-desc spirit-desc-empty">这只精灵没有收录介绍</p>
       </div>
     </div>
+
+    <!-- 抽到精灵的下方浮窗：不挡操作，几秒后自己淡出。
+         原来这里是任务列表上方的一块内嵌结果卡，问题跟任务页那个一样 ——
+         弹出来会在页面里占一行位置，把下面的内容整体顶下去 -->
+    <Toast :notice="notice" />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useUserStore } from '../stores/user'
 import { starlightApi } from '../api'
+import Toast from '../components/Toast.vue'
 // wiki 上标「异色外观」的那个小图标（57×56）。
 // 详情页立绘切换那一排 tab 里就有它，193 只异色共用同一张 —— 所以它才是
 // 「这只是异色」的官方标志，不是各写各的 emoji。见 docs/核心功能 7.8。
@@ -320,9 +281,9 @@ const emptyState = {
 }
 
 const state = ref({ ...emptyState })
-// 抽到精灵的结果卡（或「今天抽完了」这类提示），几秒后自己消失
-const result = ref(null)
-let resultTimer = null
+// 抽到精灵的下方浮窗（或「今天抽完了」这类提示），几秒后自己消失
+const notice = ref(null)
+let noticeTimer = null
 
 // 正在抽精灵的任务 id（空串 = 没有请求在飞），用来在请求期间禁用「完成」按钮
 const completingId = ref('')
@@ -484,17 +445,17 @@ const removeTask = async (task) => {
   }
 }
 
-// 结果卡几秒后自己淡出，连续点「完成」不会被挡住
-const showResult = (payload) => {
-  result.value = payload
-  clearTimeout(resultTimer)
-  resultTimer = setTimeout(() => {
-    result.value = null
-  }, 6000)
+// 浮窗几秒后自己淡出，连续点「完成」不会被挡住
+const showNotice = (payload, type = 'success') => {
+  notice.value = { type, ...payload }
+  clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => {
+    notice.value = null
+  }, 3500)
 }
 
 const completeTask = async (task) => {
-  // 正在抽精灵的任务 id。结果卡是不挡操作的（点完成不会被弹窗挡住），
+  // 正在抽精灵的任务 id。浮窗是不挡操作的（点完成不会被弹窗挡住），
   // 所以更得防连点：连点两下会一次任务抽走两只精灵，还破坏「不放回」的语义。
   // 后端有一把按用户分的锁兜底，这里挡在第一线。
   if (completingId.value) return
@@ -505,22 +466,37 @@ const completeTask = async (task) => {
 
     if (res.code === 0) {
       state.value = { ...state.value, ...res.data.state }
-      showResult({
-        spirit: res.data.spirit,
-        // 这次进账的洛克贝。**不是星光值** —— 页面上不显示星光值
-        rocoEarned: res.data.rocoEarned,
-        // 这一下刚好够档位，凝结是当次就发生的，得说一声，不然星星是哪儿来的会看不懂
-        condensedNow: res.data.state.condensedNow
-      })
+      showSpiritNotice(res.data)
     } else {
-      // 「今天的精灵都抽完了」也走这里，用同一块地方提示，不弹 alert 打断
-      showResult({ error: res.message || '完成失败' })
+      // 「今天的精灵都抽完了」也走这里，用同一条浮窗提示，不弹 alert 打断
+      showNotice({ text: res.message || '完成失败' }, 'error')
     }
   } catch (error) {
-    showResult({ error: '完成失败' })
+    showNotice({ text: '完成失败' }, 'error')
   } finally {
     completingId.value = ''
   }
+}
+
+// 抽到精灵的浮窗：头像 + 名字 + 编号 + 本次进账的洛克贝（倍率用小标跟在后面）。
+//
+// 只有这里写**实际进账**的数（+24000），跟小卡片 / 弹窗上的 1200×10 故意不一样：
+// 这句是个 `+N` 的记账，写基础值等于报错账。后面那个 1200×10 就是给人对账用的。
+const showSpiritNotice = (data) => {
+  const spirit = data.spirit
+  const condensed = data.state && data.state.condensedNow > 0
+    ? ` · 凝结出 ${data.state.condensedNow} 颗许愿星`
+    : ''
+
+  showNotice({
+    // 头像加载失败过就整块不传，让 Toast 那格不渲染（不然是个破图）
+    thumb: broken.value[spirit.id] ? '' : cardImage(spirit),
+    title: displayName(spirit),
+    text: `No.${spirit.number} · +${data.rocoEarned} 洛克贝${condensed}`,
+    badge: spirit.rocoMultiplier > 1
+      ? { text: `${baseRoco(spirit)}×${spirit.rocoMultiplier}`, title: rocoTitle(spirit) }
+      : null
+  })
 }
 
 const formatTime = (timestamp) => {
@@ -533,6 +509,11 @@ const formatTime = (timestamp) => {
 }
 
 onMounted(fetchState)
+
+// 切换页面时那个定时器还挂在那儿，会把已经卸掉的组件里的 ref 再改一次
+onUnmounted(() => {
+  clearTimeout(noticeTimer)
+})
 </script>
 
 <style scoped>
@@ -654,106 +635,11 @@ onMounted(fetchState)
   color: #B0B0B0;
 }
 
-/* 抽到精灵的结果卡 */
-.result-card {
-  margin-bottom: 1.5rem;
-  border-color: rgba(46, 204, 113, 0.4);
-}
-
-/* 进出场。原来只有 `animation: fadeIn`，也就是只淡入 —— 6 秒到点是 v-if
-   直接把节点摘掉，啪一下消失。改用 Transition，**淡出（0.6s）比淡入（0.3s）慢**，
-   才是「渐进式消失」 */
-.result-fade-enter-active {
-  transition: opacity 0.3s ease, transform 0.3s ease;
-}
-
-.result-fade-leave-active {
-  transition: opacity 0.6s ease, transform 0.6s ease;
-}
-
-.result-fade-enter-from,
-.result-fade-leave-to {
-  opacity: 0;
-  transform: translateY(-10px);
-}
-
-.result-card.result-error {
-  border-color: rgba(231, 76, 60, 0.4);
-}
-
-.result-error-text {
-  color: #E74C3C;
-  font-weight: 600;
-}
-
-.result-title {
-  font-size: 0.85rem;
-  color: #2ECC71;
-  font-weight: 600;
-  margin-bottom: 0.75rem;
-}
-
-.result-body {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.result-thumb {
-  width: 84px;
-  height: 84px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 215, 0, 0.25);
-}
-
-.result-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.result-name {
-  font-size: 1.2rem;
-  font-weight: 700;
-  margin-bottom: 0.25rem;
-}
-
-/* 结果卡名字前面的同一张「异色外观」图标 */
-.result-name .shiny-mark {
-  width: 20px;
-  height: 20px;
-  margin-right: 0.35rem;
-  vertical-align: -4px;
-}
-
-.result-roco {
-  font-size: 1.35rem;
-  color: #FFD700;
-}
-
-.result-unit {
-  font-size: 0.85rem;
-  color: #B0B0B0;
-}
-
-.result-no {
-  margin-top: 0.25rem;
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.35);
-}
-
-.result-condense {
-  margin-top: 0.85rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid rgba(74, 144, 217, 0.1);
-  font-size: 0.85rem;
-  color: #FFD700;
-}
+/* 以前这里有一整块「抽到精灵的结果卡」（.result-card / .result-thumb / .result-fade
+   等），现在提示改走下方浮窗、CSS 跟着共用组件 components/Toast.vue 走了，整块删掉。
+   别再加回来：内嵌结果卡会在页面里占一行位置，弹出来把下面的内容顶下去。
+   注意下面 .shiny-mark / .roco-boost 那几个是**小卡片和详情弹窗也在用**的，
+   别跟着一起删（它们长得像，但不是这一块的） */
 
 /* 今日抽到的精灵：小卡片平铺 */
 .sprite-grid {
