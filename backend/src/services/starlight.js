@@ -1,14 +1,27 @@
 // 星光值：独立于「星星」体系的一个小玩法（参考《洛克王国：世界》的星光值 / 许愿星）
 //
+// **这里其实是两套独立的数**，只是碰巧都由「完成一次星光值任务」这一个动作产生：
+//   星光值 → 喂阶梯 → 凝结出许愿星（累计数，页面上的「许愿星」）
+//   洛克贝 → 直接累计（页面上的「洛克贝」）
+// 两边的加成规则、数量级、展示位置都不一样，代码里也各走各的函数（见 spirits.js）。
+// 唯一的交汇点就是 completeStarlightTask()：抽一次精灵，两样一起进账。
+//
 // 三条规则单独说明一下，因为它们都不太直觉：
 // 1. 星光值只按天累计，当天没用掉的第二天作废；但**已经凝结出来的许愿星不受影响**，
-//    待入库的和已入库的都跨天保留。
-// 2. 凝结是**自动**的 —— 星光值够下一档就立刻扣掉并生成一颗许愿星，不需要手动点。
-//    档位只看「当天第几颗」，每天重置，所以昨天没入库的星星不会拖累今天的档位。
-// 3. 凝结出来的星星先躺在「待入库」区，玩家点一下才算进「凝结许愿星总数」。
+//    跨天保留。
+// 2. 凝结是**自动**的 —— 星光值够下一档就立刻扣掉并凝结一颗许愿星，不需要手动点。
+//    档位只看「当天第几颗」，每天重置，所以昨天凝的星星不会拖累今天的档位。
+// 3. 凝结出来的星星**直接进「凝结许愿星总数」**，没有「待入库」这个中间态了。
+//    老的 pending 字段在 ensureStarlight 里被并进 banked（用户的要求：许愿星全留）。
+//
+// **星光值本身页面上一个字都不显示**（用户明确要求）：它是内部计价单位，只在
+// 「距离下一颗许愿星还差多少」那条进度条上以比例的形式体现。所以状态对象里照旧
+// 带着 value，但前端不该把它写出来 —— 加字段的时候别顺手又把它显示回去。
+//
+// 洛克贝没有阶梯，抽到多少就是多少，只做「当天 / 总共」两个累计。
 //
 // 星光值怎么来的：完成星光值任务 = 从当天的精灵池里抽一只**还没抽到过的**精灵
-// （不放回），把这只精灵的星光值加进来。精灵数据见 services/spirits.js。
+// （不放回），把这只精灵的星光值（和洛克贝）加进来。精灵数据见 services/spirits.js。
 //
 // 这套数字跟 current_stars / total_stars 完全无关，流水也单独记一份，
 // 不要把它接到统计页那份星星流水上。
@@ -79,17 +92,36 @@ async function ensureStarlight(store, userId, now = new Date()) {
   const raw = (await store.hgetall(key)) || {};
 
   let value = parseInt(raw.value) || 0;
-  let pending = parseInt(raw.pending) || 0;
-  const banked = parseInt(raw.banked) || 0;
+  let banked = parseInt(raw.banked) || 0;
   let todayCondensed = parseInt(raw.today_condensed) || 0;
   let todayEarned = parseInt(raw.today_earned) || 0;
+  let rocoTotal = parseInt(raw.roco_total) || 0;
+  let rocoToday = parseInt(raw.roco_today) || 0;
 
-  // 跨天：星光值和「今日累计获得」清零；待入库的星星、已入库总数都留着
+  // 老数据迁移：以前凝结出来的星星先躺在 pending 里，要玩家点一下「入库」才算数。
+  // 现在改成自动进总数了，所以把还躺在天上的那些一次性并进 banked。
+  // 用户的决定是「许愿星全留」，改规则不能让已经凝出来的星星凭空消失。
+  //
+  // 先加完再把 pending 写成 0，所以这段是幂等的：第二次进来 pending 已经是 0。
+  // 下面 next 里那个 pending: '0' 不能省 —— 少了它 diff 认为没变化，
+  // 清零就写不回存储，每次都要重新加一遍。
+  const pendingLeft = parseInt(raw.pending) || 0;
+  if (pendingLeft > 0) banked += pendingLeft;
+
+  // 跨天：星光值和「今日累计获得」清零；已凝结的许愿星总数留着
   let valueDate = raw.value_date || date;
   if (valueDate !== date) {
     value = 0;
     todayEarned = 0;
     valueDate = date;
+  }
+
+  // 跨天：今日洛克贝清零，总数留着。老数据没有 roco_date 字段，
+  // 取 date 当基准就等于「从今天开始算」，不会误清（那时 roco_today 本来也是 0）
+  let rocoDate = raw.roco_date || date;
+  if (rocoDate !== date) {
+    rocoToday = 0;
+    rocoDate = date;
   }
 
   // 跨天：档位回到第 1 颗
@@ -99,7 +131,8 @@ async function ensureStarlight(store, userId, now = new Date()) {
     condenseDate = date;
   }
 
-  // 自动凝结：够一档就扣一档，一直凝到不够为止（一天封顶 25 颗）
+  // 自动凝结：够一档就扣一档，一直凝到不够为止（一天封顶 25 颗）。
+  // 凝出来的直接 banked++ —— 没有「待入库」这个中间态了
   let condensedNow = 0;
   let spentNow = 0;
   while (todayCondensed < MAX_DAILY_STARS) {
@@ -108,43 +141,48 @@ async function ensureStarlight(store, userId, now = new Date()) {
     value -= cost;
     spentNow += cost;
     todayCondensed++;
-    pending++;
+    banked++;
     condensedNow++;
   }
 
   // 字段全部自己 String() 一遍 —— memoryStore.hset 不会帮你转
   const next = {
     value: String(value),
-    pending: String(pending),
+    // 恒为 '0'，只是把上面那次迁移的结果落盘（见 pendingLeft 那段注释）。
+    // **别因为「没人读它了」就把这一行删掉**，删了迁移就写不回去
+    pending: '0',
     banked: String(banked),
     today_condensed: String(todayCondensed),
     today_earned: String(todayEarned),
+    roco_total: String(rocoTotal),
+    roco_today: String(rocoToday),
     value_date: valueDate,
+    roco_date: rocoDate,
     condense_date: condenseDate
   };
 
   const changed = Object.keys(next).some((f) => raw[f] !== next[f]);
   if (changed) await store.hset(key, next);
 
-  if (condensedNow > 0) {
-    await addLog(store, userId, {
-      type: 'expenditure',
-      category: 'starlight_condense',
-      amount: -spentNow,
-      unit: '星光值',
-      description: `凝结出 ${condensedNow} 颗许愿星，消耗 ${spentNow} 星光值`
-    });
-  }
+  // 凝结**不再单独记一条流水**：流水整份改成洛克贝的了（用户要求记录里不出现
+  // 星光值 / 许愿星的流水）。凝了几颗由结果卡和统计里的「当天许愿星」体现，
+  // 不用在流水里再说一遍 —— 说一遍就得写「星光值」三个字，正是要去掉的那个。
+  // spentNow 照旧回报给调用方。
 
   const nextStarCost = costOfStar(todayCondensed + 1);
 
   return {
     date,
+    // 当前星光值。**只给进度条算比例用，页面上不显示这个数字**。
+    // 前端要「还差多少」直接用 nextRemaining，别把 value 写出来
     value,
-    pending,
     banked,
+    // 当天凝结出来的许愿星（就是档位计数，每天重置）
     todayCondensed,
     todayEarned,
+    // 洛克贝：当天 / 总共
+    rocoTotal,
+    rocoToday,
     maxDailyStars: MAX_DAILY_STARS,
     // 下一颗要多少星光值；今天已经凝满 25 颗时为 null
     nextCost: nextStarCost,
@@ -192,13 +230,23 @@ async function completeStarlightTask(store, task, now = new Date()) {
       return { error: '今天的精灵都抽完了，明天再来吧' };
     }
 
-    // 特殊形态（异色 / 地区形态 / 首领化）星光值翻倍，每多一个标签再翻一倍。
-    // spirit.star 是图鉴上的基础值，乘完这个才是真正进账的数 ——
+    // 一次抽卡两样一起进账，各按各的规则算：
+    //   星光值：特殊形态翻倍，每多一个标签再翻一倍（×1/2/4/8）→ 喂下面的阶梯
+    //   洛克贝：异色 ×10、每个形态标签 ×2（×1/2/4/10/20/40）→ 直接累计
+    // spirit.star / spirit.roco 都是图鉴上的**基础值**，乘完才是真正进账的数 ——
     // 进账、流水、记录里存的都是乘完的，只有图鉴上那个基础值留在池子里。
+    // 两套倍率都在 spirits.js 里，别在这边重算。
     const earned = spirit.star * spirit.starMultiplier;
+    const rocoEarned = spirit.roco * spirit.rocoMultiplier;
 
     await store.hincrby(stateKey(userId), 'value', earned);
     await store.hincrby(stateKey(userId), 'today_earned', earned);
+
+    // 洛克贝不参与阶梯，就是两个计数器。
+    // 跨天清零由上面那次 ensureStarlight 负责（它在加数之前跑，顺带把
+    // roco_date 刷成今天），所以这里直接加是安全的 —— 跟 value 同一个道理
+    await store.hincrby(stateKey(userId), 'roco_total', rocoEarned);
+    await store.hincrby(stateKey(userId), 'roco_today', rocoEarned);
 
     // 记录里只存 id 和几个展示字段，详情（立绘、介绍、属性…）在读取时现查池子，
     // 见 spirits.js 的 enrichDraw()。这样图鉴更新之后详情跟着新，记录也不臃肿。
@@ -206,11 +254,18 @@ async function completeStarlightTask(store, task, now = new Date()) {
       id: spirit.id,
       number: spirit.number,
       name: spirit.name,
+      // 这次抽到给了多少星光值。**页面上已经不显示了**（星光值彻底不显示），
+      // 但还是照存：记录是历史，删掉的字段以后想要也补不回来，而且它就是
+      // 当时凝结出那颗许愿星的凭据
       star: earned,
-      // 当时翻了几个倍（1/2/4/8）。**必须存进记录**：倍率规则改过，前端要用它把
-      // 进账除回去算出图鉴基础值，拿池子现在的规则去算老记录会算错。
-      // 详见 spirits.js 的 multiplierOfRecord()
       starMultiplier: spirit.starMultiplier,
+      // 这次抽到给了多少洛克贝（已经乘过加成）—— 页面上显示的就是这个数
+      roco: rocoEarned,
+      // 洛克贝翻了几倍（1/2/4/10/20/40）。**必须跟 starMultiplier 分开存**：
+      // 两套规则不一样，而且以后还会各改各的。前端要用它把进账除回去算图鉴
+      // 基础值，拿池子现在的规则去算老记录会算错。
+      // 详见 spirits.js 的 rocoMultiplierOfRecord()
+      rocoMultiplier: spirit.rocoMultiplier,
       headUrl: spirit.headUrl,
       at: now.getTime()
     };
@@ -225,61 +280,25 @@ async function completeStarlightTask(store, task, now = new Date()) {
       updated_at: String(Date.now())
     });
 
+    // 流水整份是**洛克贝**的（用户要求：记录里只留洛克贝，不出现星光值和
+    // 许愿星的流水）。旧的星光值/许愿星流水躺在存储里不动，页面按 unit 过滤掉
     await addLog(store, userId, {
       type: 'income',
       category: 'starlight_task',
-      amount: earned,
-      unit: '星光值',
-      description: `抽到「${spirit.name}」获得 ${earned} 星光值` +
+      amount: rocoEarned,
+      unit: '洛克贝',
+      description: `抽到「${spirit.name}」获得 ${rocoEarned} 洛克贝` +
         // 翻倍了就得说一声：流水上的数字比图鉴上大，不解释看着像算错。
-        // 用 formLabel 把**是哪几个标签**写出来（「首领化 · 地区形态 ×4」），
-        // 笼统写「异色/特殊形态」看不出 4 倍是怎么来的
-        (spirit.starMultiplier > 1 ? `（${spirit.formLabel} ×${spirit.starMultiplier}）` : '')
+        // 用 formLabel 把**是哪几个标签**写出来（「首领化 · 异色 ×20」），
+        // 笼统写「异色/特殊形态」看不出 20 倍是怎么来的
+        (spirit.rocoMultiplier > 1 ? `（${spirit.formLabel} ×${spirit.rocoMultiplier}）` : '')
     });
 
     const state = await ensureStarlight(store, userId, now);
     // 返回补全过的形状，跟「今日抽到的精灵」里那些保持一致 ——
     // 两处形状不一样的话，前端为结果卡和卡片写两套字段很容易漏。
-    return { spirit: enrichDraw(draw), earned, state, completeCount: newComplete };
-  });
-}
-
-// 入库：把待入库的许愿星收进「凝结许愿星总数」
-async function collectStars(store, userId, count, now = new Date()) {
-  // 「读待入库 → 判断够不够 → 扣掉」整段串行，跟 completeStarlightTask 用同一把锁
-  // （两者都在动同一个 hash）。
-  //
-  // 不传 count 时后端按「待入库的全部」收，这正是并发下最危险的形式：
-  // 两个请求各自读到 pending=3，各自认为「全部就是 3」，于是各扣 3 各加 3 ——
-  // 待入库直接变负数，已入库凭空多一倍。
-  return withLock(`starlight:${userId}`, async () => {
-    const state = await ensureStarlight(store, userId, now);
-
-    // 先单独判「没得收」——不然待入库为 0 时会在下面被误报成「数量不合法」
-    if (state.pending < 1) {
-      return { error: '现在没有待入库的许愿星' };
-    }
-
-    const want = count === undefined || count === null ? state.pending : count;
-    if (!Number.isInteger(want) || want < 1) {
-      return { error: '入库数量不合法' };
-    }
-    if (want > state.pending) {
-      return { error: '待入库的许愿星不够' };
-    }
-
-    await store.hincrby(stateKey(userId), 'pending', -want);
-    await store.hincrby(stateKey(userId), 'banked', want);
-
-    await addLog(store, userId, {
-      type: 'income',
-      category: 'starlight_collect',
-      amount: want,
-      unit: '颗',
-      description: `收起 ${want} 颗许愿星，放进了仓库`
-    });
-
-    return { collected: want, state: await ensureStarlight(store, userId, now) };
+    // earned 是星光值，只留给调用方做日志/调试，页面上不显示
+    return { spirit: enrichDraw(draw), earned, rocoEarned, state, completeCount: newComplete };
   });
 }
 
@@ -295,6 +314,5 @@ module.exports = {
   addLog,
   loadDraws,
   ensureStarlight,
-  completeStarlightTask,
-  collectStars
+  completeStarlightTask
 };

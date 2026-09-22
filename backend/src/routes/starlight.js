@@ -10,8 +10,7 @@ const {
   logKey,
   loadDraws,
   ensureStarlight,
-  completeStarlightTask,
-  collectStars
+  completeStarlightTask
 } = require('../services/starlight');
 const { countRemaining, countTotal, enrichDraw } = require('../services/spirits');
 
@@ -19,7 +18,8 @@ const { countRemaining, countTotal, enrichDraw } = require('../services/spirits'
 const STARLIGHT_LOG_DAYS = 7;
 
 // 组装一份完整状态：
-// 当前星光值 + 待入库 + 已入库 + 今日抽到的精灵 + 任务列表 + 流水
+// 许愿星（当天 / 总数）+ 洛克贝（当天 / 总数）+ 进度 + 今日抽到的精灵
+// + 任务列表 + 流水。星光值本身也在里面，但页面不显示那个数字。
 async function buildState(store, userId) {
   const state = await ensureStarlight(store, userId);
 
@@ -36,11 +36,18 @@ async function buildState(store, userId) {
   //
   // 存储里的流水一条都不删 —— 那是历史记录。这里只是不往页面上搬：
   // 再往前的既翻不到也没人看，白白占一份响应体。
+  //
+  // **只搬洛克贝的**（unit === '洛克贝'）：用户要求记录里只留洛克贝流水，
+  // 不出现星光值和许愿星的。以前那些 unit 是 '星光值'（抽卡进账、自动凝结）
+  // 和 '颗'（手动入库）的老条目就留在存储里，不往页面上搬了 —— 老流水隐藏。
+  // 过滤放在后端而不是前端，是因为这个接口是唯一的出口：
+  // 前端自己滤的话，哪天新加一个页面就得再记一次「记得滤掉星光值」。
   const logCutoff = Date.now() - STARLIGHT_LOG_DAYS * 24 * 3600 * 1000;
   const rawLogs = await store.zrevrange(logKey(userId), 0, 49);
   const logs = rawLogs
     .map((l) => JSON.parse(l))
-    .filter((l) => (l && l.created_at ? l.created_at : 0) >= logCutoff);
+    .filter((l) => l && l.unit === '洛克贝')
+    .filter((l) => (l.created_at || 0) >= logCutoff);
 
   // 今日抽到的精灵（抽到的先后顺序），以及池子里还剩多少只没抽到。
   // poolTotal 是给前端分辨「今天抽完了」和「池子没加载出来」用的。
@@ -178,7 +185,9 @@ router.post('/tasks/:taskId/complete', async (req, res) => {
       code: 0,
       data: {
         spirit: result.spirit,
-        earned: result.earned,
+        // 这次进账的洛克贝（spirit.roco 里也是同一个数，这里单独给一份，
+        // 省得前端为结果卡再挖一层）。**不返回星光值** —— 页面不显示它
+        rocoEarned: result.rocoEarned,
         state: {
           ...state,
           // 这两个只跟「这一次」有关，不入库，只在响应里带出去
@@ -192,29 +201,7 @@ router.post('/tasks/:taskId/complete', async (req, res) => {
   }
 });
 
-// 入库：把待入库的许愿星收进总数
-router.post('/collect', async (req, res) => {
-  try {
-    const { userId, count } = req.body;
-    if (!userId) {
-      return res.status(400).json({ code: 1, message: '缺少userId参数' });
-    }
-
-    const result = await collectStars(req.redis, userId, count);
-    if (result.error) {
-      return res.json({ code: 1, message: result.error });
-    }
-
-    res.json({
-      code: 0,
-      data: {
-        collected: result.collected,
-        state: await buildState(req.redis, userId)
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ code: 1, message: error.message });
-  }
-});
+// 原来这里还有个 POST /collect（手动把「待入库」的许愿星收进总数）。
+// 现在凝结出来就直接进总数了，整条路径和它的前端按钮一起去掉了。
 
 module.exports = router;

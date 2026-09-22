@@ -85,6 +85,70 @@ function multiplierOf(raw) {
   return SPECIAL_MULTIPLIER ** specialTagCount(raw);
 }
 
+// ---- 洛克贝 ----
+//
+// 跟星光值**是两套独立的数**，只是碰巧都由「抽到一只精灵」这一个动作产生。
+// 规则、数量级、界面展示全都不一样，别把两边的函数混用。
+//
+// 洛克贝缺失时的兜底。取 3000 是因为 390 只本体基础形态的洛克贝中位数正好是
+// 3000（wiki 上只取 1200/1800/2100/2400/3000/3150/4200/4500/6000 这 9 档），
+// 拿中位数兜底不会把平均值带偏。同样不能给 0 —— 会出现「抽到首领化获得
+// 0 洛克贝」这种看着像坏掉的结果。
+const ROCO_FALLBACK = 3000;
+
+// 洛克贝的加成跟星光值**不是一套**：
+//   异色        ×10
+//   每个形态标签 ×2（地区形态、首领化各算一个，两个都占再乘一次）
+// 所以：单形态 ×2、首领化+地区形态 ×4、异色 ×10、异色+首领化 ×20、三个标签 ×40。
+// 同样不封顶，理由跟星光值那条一样。
+const SHINY_ROCO_MULTIPLIER = 10;
+const FORM_ROCO_MULTIPLIER = 2;
+
+// 这只身上挂了几个**形态**标签（0-2）。异色不算在形态里 —— 洛克贝这边异色
+// 是单独一档 ×10，不是 ×2 的幂（见 rocoMultiplierOf）。
+function rocoFormTagCount(raw) {
+  let n = 0;
+  if (REGIONAL_FORMS.has(raw.form)) n += 1;
+  if (LORD_FORMS.has(raw.form)) n += 1;
+  return n;
+}
+
+function rocoShinyMultiplierOf(raw) {
+  return raw.kind === 'shiny' ? SHINY_ROCO_MULTIPLIER : 1;
+}
+
+function rocoFormMultiplierOf(raw) {
+  return FORM_ROCO_MULTIPLIER ** rocoFormTagCount(raw);
+}
+
+function rocoMultiplierOf(raw) {
+  return rocoShinyMultiplierOf(raw) * rocoFormMultiplierOf(raw);
+}
+
+// 这只精灵算多少洛克贝。starFound → rocoFound，STAR_FALLBACK → ROCO_FALLBACK，
+// 往上找的逻辑一模一样（异色跟它普通颜色那版同价，因为异色就挂在那一版底下）。
+// 没合并成一个通用函数是因为两个字段的 Found 标志要各判各的：现在两个缺失集合
+// 完全重合，但 wiki 哪天只补其中一个，合并就会把有值的当没值。
+function resolveRoco(raw, rawById) {
+  if (raw.rocoFound) {
+    const r = parseInt(raw.roco);
+    if (Number.isFinite(r) && r >= 0) return r;
+  }
+
+  let cur = raw;
+  for (let guard = 0; cur && cur.parentId && guard < 16; guard++) {
+    const parent = rawById.get(String(cur.parentId));
+    if (!parent) break;
+    if (parent.rocoFound) {
+      const r = parseInt(parent.roco);
+      if (Number.isFinite(r) && r >= 0) return r;
+    }
+    cur = parent;
+  }
+
+  return ROCO_FALLBACK;
+}
+
 // 启动时填一次，之后一直是它（见文件头注释）
 let cache = null;
 
@@ -156,6 +220,11 @@ function normalize(raw, rawById) {
   const star = resolveStar(raw, rawById);
   if (!Number.isFinite(star) || star < 0) return null;
 
+  // 跟 star 各查各的（两个字段的 Found 标志分开判，见 resolveRoco 的注释）。
+  // 洛克贝这条不返回 null 丢掉整只 —— 星光值是抽奖的计价单位，缺了没意义；
+  // 洛克贝只是附带收益，有兜底值就能继续。
+  const roco = resolveRoco(raw, rawById);
+
   const name = String(raw.name);
 
   return {
@@ -172,6 +241,16 @@ function normalize(raw, rawById) {
     // star（图鉴上的基础值）。**抽到时要把这个数一起写进记录** —— 规则以后还会变，
     // 不存下来的话老记录会被新规则重算错（见 enrichDraw 的注释）
     starMultiplier: multiplierOf(raw),
+    // 图鉴上的**基础**洛克贝，不含加成 —— 抽到手时是 roco * rocoMultiplier。
+    // 跟上面的 star 是两个独立的数，不是一套单位换算出来的
+    roco,
+    // 洛克贝的倍率（1 / 2 / 4 / 10 / 20 / 40，见 rocoMultiplierOf）。**跟
+    // starMultiplier 分开存**：规则不同、以后还会各改各的，合成一个字段迟早要拆
+    rocoMultiplier: rocoMultiplierOf(raw),
+    // 洛克贝倍率的两个组成部分，只给详情弹窗写说明用（「异色 ×10 · 首领化 ×2」）。
+    // 抽奖结算用的是上面那个合起来的数 —— 这三个数别互相替代
+    rocoShinyMultiplier: rocoShinyMultiplierOf(raw),
+    rocoFormMultiplier: rocoFormMultiplierOf(raw),
     // 详情弹窗要的
     desc: raw.desc || null,
     kicker: raw.kicker || null,
@@ -275,8 +354,37 @@ function multiplierOfRecord(record, entity) {
   return KNOWN_MULTIPLIERS.has(ratio) ? ratio : 1;
 }
 
+// 洛克贝这边能出现的倍率：异色档 {1,10} × 形态档 {1,2,4}，**没有 8**
+// （形态最多两个标签，2²=4 就到顶了），所以是这 6 个而不是星光值那 4 个。
+// 两张表别互相复用，以后哪边加一档就串了。
+const KNOWN_ROCO_MULTIPLIERS = new Set([1, 2, 4, 10, 20, 40]);
+
+// 跟 multiplierOfRecord 一个套路：优先信记录里存的那份，老记录才用
+// 「进账 ÷ 图鉴基础值」反推。洛克贝是这次新加的，所以现在没有「老记录」——
+// 但规则以后要是改了，这段就是唯一的补救入口，别删。
+function rocoMultiplierOfRecord(record, entity) {
+  const stored = parseInt(record.rocoMultiplier);
+  if (Number.isFinite(stored) && KNOWN_ROCO_MULTIPLIERS.has(stored)) return stored;
+
+  const base = entity ? parseInt(entity.roco) : 0;
+  const earned = parseInt(record.roco);
+  if (!base || !Number.isFinite(earned)) return 1;
+  const ratio = earned / base;
+  return KNOWN_ROCO_MULTIPLIERS.has(ratio) ? ratio : 1;
+}
+
 function enrichDraw(record) {
   const e = resolveDrawEntity(record);
+
+  // 「异色 ×10 · 首领化 ×2」这段说明的两个因子，只给详情弹窗用。**只有两段乘起来
+  // 正好等于记录里那个倍率时才给出去**：万一日后只改了其中一条规则，老记录存的
+  // 倍率是旧规则算的，而池子给的是新规则的两段，直接拼起来会写成
+  // 「×10 · ×2，本次获得 18000」这种对不上账的话。对不上就退回只显示总的 ×N。
+  const rocoMul = rocoMultiplierOfRecord(record, e);
+  const rocoParts = e && e.rocoShinyMultiplier * e.rocoFormMultiplier === rocoMul
+    ? { rocoShinyMultiplier: e.rocoShinyMultiplier, rocoFormMultiplier: e.rocoFormMultiplier }
+    : { rocoShinyMultiplier: null, rocoFormMultiplier: null };
+
   return {
     id: e ? e.id : (record.id || null),
     number: record.number,
@@ -287,6 +395,13 @@ function enrichDraw(record) {
     // 这次翻了几倍（1/2/4/8）。前端拿它决定要不要标「×N」、以及除回去算基础值，
     // 不用自己重推一遍规则。**看的是记录当时那份，不是池子现在的规则**
     starMultiplier: multiplierOfRecord(record, e),
+    // 本次获得的洛克贝（同样**已经乘过加成**），跟 star 一样按记录里的来。
+    // 没有就是 null，前端据此决定这一行显不显示 —— 洛克贝是这次新加的，
+    // 改动之前抽的老记录读出来就是 null，正好对应「老流水只留许愿星」。
+    // **别拿它兜底成 0**，否则老记录会显示「获得 0 洛克贝」
+    roco: Number.isFinite(parseInt(record.roco)) ? parseInt(record.roco) : null,
+    rocoMultiplier: rocoMul,
+    ...rocoParts,
     headUrl: record.headUrl || (e ? e.headUrl : null),
     at: record.at,
     // 小卡片上区分异色用
@@ -328,6 +443,9 @@ module.exports = {
   DATA_DIR,
   STAR_FALLBACK,
   SPECIAL_MULTIPLIER,
+  ROCO_FALLBACK,
+  SHINY_ROCO_MULTIPLIER,
+  FORM_ROCO_MULTIPLIER,
   SPIRITS_URL_PREFIX,
   HEADS_URL_PREFIX,
   ART_URL_PREFIX,

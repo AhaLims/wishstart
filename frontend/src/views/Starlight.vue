@@ -1,32 +1,35 @@
 <template>
   <div class="starlight-page">
     <h1 class="page-title">星光值</h1>
-    <p class="page-subtitle">星光值可凝结成许愿星</p>
+    <p class="page-subtitle">星光值可凝结成许愿星，抽卡同时获得洛克贝</p>
 
-    <!-- 凝结许愿星总数 + 待入库，同一张卡。
-         这两件事本来就是一件事的两半（收了才进总数），拆成两块卡的话，
-         待入库那块排在任务列表下面，得往下滚才点得到，上面只看得到一个
-         总数就会以为凝出来的星星少了。现在上面是已入库的总数，下面是天上
-         那几颗，**整块点一下全收进来**。
-         当天还剩多少星光值在下面的进度条上，也不单列一张卡。 -->
+    <!-- 两个数分两张卡：许愿星（攒够星光值凝结出来的）和洛克贝（抽卡直接进账的）。
+         它们各记各的账，并排放是为了好对账，不是一回事 —— 颜色也分开，
+         许愿星蓝、洛克贝金（跟洛克贝图标那枚金币一个色）。
+
+         每张卡上大数是总数、下面小字是今天新增：两个数写一样大反而要停下来分辨
+         哪个是哪个。原来「待入库」那块没有了 —— 凝结出来直接进总数，不用手动收。
+
+         星光值**自己不占位置**：它是内部计价单位，页面上不显示数字，
+         只在下面那条进度条上以比例的形式体现（见进度卡那段的注释）。 -->
     <div class="overview">
       <div class="card overview-card">
         <div class="overview-label">凝结许愿星总数</div>
         <div class="overview-value number">
           {{ state.banked }}<span class="overview-unit">颗</span>
         </div>
+        <div class="overview-today">
+          今天凝结了 <b class="number">+{{ state.todayCondensed }}</b> 颗
+        </div>
+      </div>
 
-        <!-- 没有待入库的时候整块不出现，不留一个空的星星框 -->
-        <div v-if="state.pending > 0" class="overview-pending">
-          <div class="pending-title">
-            天上有 {{ state.pending }} 颗许愿星等着你摘
-          </div>
-          <p class="pending-hint">
-            点一下就把这 {{ state.pending }} 颗全部收进仓库（不点也不会消失，明天还在）
-          </p>
-          <button class="pending-stars" title="全部收进仓库" :disabled="collecting" @click="collectAll">
-            <span v-for="n in state.pending" :key="n" class="pending-star">⭐</span>
-          </button>
+      <div class="card overview-card">
+        <div class="overview-label">
+          <img class="roco-ico" :src="rocoIcon" alt="" />洛克贝总数
+        </div>
+        <div class="overview-value overview-roco number">{{ state.rocoTotal }}</div>
+        <div class="overview-today">
+          今天获得 <b class="number today-roco">+{{ state.rocoToday }}</b>
         </div>
       </div>
     </div>
@@ -62,36 +65,36 @@
 
     <div v-else class="card empty-state">
       <div class="empty-state-icon">✨</div>
-      <p>还没有星光值任务，新建一个开始攒星光值吧</p>
+      <p>还没有星光值任务，新建一个开始攒许愿星和洛克贝吧</p>
     </div>
 
-    <!-- 距下一颗的进度 -->
+    <!-- 距下一颗的进度。
+         **这里一个星光值的数字都不写** —— 用户要求星光值彻底不显示，
+         只留「下一颗许愿星」和进度比例，比例就是下面这条进度条本身。
+         原来右边写的是 `62 / 80`、下面还写「还差 18 星光值」，
+         等于把内部计价单位摊在台面上，别再加回来。 -->
     <div class="card progress-card">
       <template v-if="state.nextCost !== null">
         <div class="progress-head">
-          <span>当天第 {{ state.todayCondensed + 1 }} 颗许愿星</span>
-          <span class="progress-num number">{{ state.value }} / {{ state.nextCost }}</span>
+          <span>距离下一颗许愿星</span>
+          <span class="progress-tier">今天第 {{ state.todayCondensed + 1 }} / {{ state.maxDailyStars }} 颗</span>
         </div>
         <div class="progress-track">
           <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
         </div>
-        <p class="progress-note">
-          还差 <b class="number">{{ state.nextRemaining }}</b> 星光值就能自动凝结出下一颗
-        </p>
+        <p class="progress-note">再攒一些就自动凝结出下一颗，不用手动收</p>
       </template>
       <template v-else>
         <div class="progress-head">
           <span>今天已经凝结满 {{ state.maxDailyStars }} 颗了</span>
         </div>
+        <div class="progress-track">
+          <div class="progress-fill progress-fill-full"></div>
+        </div>
         <p class="progress-note">
-          剩下的 {{ state.value }} 星光值今天用不掉了（星光值每天清零，许愿星和已入库的总数不受影响）
+          星光值每天清零，明天重新开始 —— 已经凝结的许愿星和洛克贝都不受影响
         </p>
       </template>
-
-      <p class="tier-note">
-        今天已凝结 {{ state.todayCondensed }} / {{ state.maxDailyStars }} 颗 ·
-        凝结是自动的，够档位就扣星光值生成许愿星
-      </p>
     </div>
 
     <!-- 抽到精灵的结果卡：不挡操作，几秒后自己淡出 -->
@@ -115,19 +118,25 @@
                 </span>
                 {{ displayName(result.spirit) }}
               </div>
-              <!-- 只有这里写**实际进账**的数（+120），跟小卡片 / 弹窗上的 ★ 60 故意不一样：
-                   这句是个 `+N` 的记账，写基础值等于报错账。后面那个 60×2 就是给人对账用的 -->
-              <div class="result-star number">
-                +{{ result.earned }} <span class="result-unit">星光值</span>
-                <span v-if="result.spirit.starMultiplier > 1" class="star-boost" :title="boostTitle(result.spirit)">
-                  {{ baseStar(result.spirit) }}×{{ result.spirit.starMultiplier }}
+              <!-- 只有这里写**实际进账**的数（+24000），跟小卡片 / 弹窗上的
+                   1200×10 故意不一样：这句是个 `+N` 的记账，写基础值等于报错账。
+                   后面那个 1200×10 就是给人对账用的 -->
+              <div class="result-roco number">
+                +{{ result.rocoEarned }} <span class="result-unit">洛克贝</span>
+                <span
+                  v-if="result.spirit.rocoMultiplier > 1"
+                  class="roco-boost"
+                  :title="rocoTitle(result.spirit)"
+                >
+                  {{ baseRoco(result.spirit) }}×{{ result.spirit.rocoMultiplier }}
                 </span>
               </div>
               <div class="result-no">No.{{ result.spirit.number }}</div>
             </div>
           </div>
+          <!-- 凝结不再写「消耗 N 星光值」：那个数就是星光值，页面上不显示 -->
           <p v-if="result.condensedNow > 0" class="result-condense">
-            这一下刚好够档位，自动凝结出 {{ result.condensedNow }} 颗许愿星（消耗 {{ result.spentNow }} 星光值）
+            这一下刚好够档位，自动凝结出 {{ result.condensedNow }} 颗许愿星
           </p>
         </template>
       </div>
@@ -161,13 +170,15 @@
           </span>
         </div>
         <div class="sprite-name">{{ displayName(sprite) }}</div>
-        <!-- 这里显示的是**基础值**（60），加成靠后面那个 ×N 表示。
-             小卡片放不下「★ 120 基础 60×2」那么长的两截数字，而且一格里出现
-             两个数反而要对半天。实际进账的数（120）鼠标停上去就有。 -->
-        <div class="sprite-star number">
-          ★ {{ baseStar(sprite) }}
-          <span v-if="sprite.starMultiplier > 1" class="star-boost" :title="boostTitle(sprite)">
-            ×{{ sprite.starMultiplier }}
+        <!-- 这里显示的是**基础值**（1200），加成靠后面那个 ×N 表示。
+             小卡片放不下「12000 基础 1200×10」那么长的两截数字，而且一格里出现
+             两个数反而要对半天。实际进账的数（12000）鼠标停上去就有。
+             roco 为 null 是这次改动之前抽的老记录（那时候只记星光值），
+             整行不出现比显示「+0 洛克贝」好。 -->
+        <div v-if="sprite.roco != null" class="sprite-roco number">
+          <img class="roco-ico" :src="rocoIcon" alt="" />{{ baseRoco(sprite) }}
+          <span v-if="sprite.rocoMultiplier > 1" class="roco-boost" :title="rocoTitle(sprite)">
+            ×{{ sprite.rocoMultiplier }}
           </span>
         </div>
       </button>
@@ -179,8 +190,9 @@
       <p v-else>没有读到精灵数据，检查一下数据目录里有没有 data/entities.json</p>
     </div>
 
-    <!-- 流水 -->
-    <h2 class="section-title logs-title">星光值流水</h2>
+    <!-- 流水。**只有洛克贝的**：星光值和许愿星的流水后端已经不往这里发了
+         （老条目留在存储里，不显示）。所以这里不用再按 unit 过滤一遍 -->
+    <h2 class="section-title logs-title">洛克贝流水</h2>
     <div class="card logs-card">
       <div class="logs-list">
         <div v-for="log in state.logs" :key="log.id" class="log-item">
@@ -189,7 +201,8 @@
             <div class="log-time">{{ formatTime(log.created_at) }}</div>
           </div>
           <div class="log-amount number" :class="log.type">
-            {{ log.type === 'income' ? '+' : '' }}{{ log.amount }} {{ log.unit }}
+            <img class="roco-ico" :src="rocoIcon" alt="" />
+            {{ log.type === 'income' ? '+' : '' }}{{ log.amount }}
           </div>
         </div>
 
@@ -200,7 +213,7 @@
     </div>
 
     <p class="footnote">
-      星光值和凝结出来的许愿星跟任务、抽卡那套星星分开记账，暂时还不能兑换东西。
+      洛克贝和凝结出来的许愿星跟任务、抽卡那套星星分开记账，暂时还不能兑换东西。
     </p>
 
     <!-- 新建 / 编辑弹框 -->
@@ -214,8 +227,8 @@
         </div>
 
         <p class="form-hint">
-          完成一次就从今天的精灵池里随机抽一只还没抽到过的精灵，
-          这只精灵值多少星光值就加多少。
+          完成一次就从今天的精灵池里随机抽一只还没抽到过的精灵。
+          这只精灵值多少洛克贝就加多少，攒的星光值够档位还会自动凝结成许愿星。
         </p>
 
         <p v-if="formError" class="form-error">{{ formError }}</p>
@@ -256,11 +269,13 @@
         </div>
 
         <!-- 弹窗里也跟小卡片一样显示基础值 + ×N，两处对得上
-             （弹窗写 120、卡片写 60 的话，又得解释一遍为什么不是一个数） -->
-        <div class="spirit-star number">
-          ★ {{ baseStar(detail) }}<span class="spirit-star-unit">星光值</span>
-          <span v-if="detail.starMultiplier > 1" class="star-boost" :title="boostTitle(detail)">
-            ×{{ detail.starMultiplier }}
+             （弹窗写 12000、卡片写 1200 的话，又得解释一遍为什么不是一个数）。
+             老记录没有 roco，整行不出现 -->
+        <div v-if="detail.roco != null" class="spirit-roco number">
+          <img class="roco-ico" :src="rocoIcon" alt="" />{{ baseRoco(detail) }}
+          <span class="spirit-roco-unit">洛克贝</span>
+          <span v-if="detail.rocoMultiplier > 1" class="roco-boost" :title="rocoTitle(detail)">
+            ×{{ detail.rocoMultiplier }}
           </span>
         </div>
 
@@ -279,19 +294,24 @@ import { starlightApi } from '../api'
 // 详情页立绘切换那一排 tab 里就有它，193 只异色共用同一张 —— 所以它才是
 // 「这只是异色」的官方标志，不是各写各的 emoji。见 docs/核心功能 7.8。
 import shinyIcon from '../assets/shiny-icon.png'
+// 洛克贝的官方图标（128×128 的金币），跟异色图标一样是从 wiki 上扒下来的那张，
+// 不是在 emoji 里挑一个 —— 抽卡页面上「这是洛克贝」得跟游戏里长得是同一个东西
+import rocoIcon from '../assets/roco-icon.png'
 
 const userStore = useUserStore()
 
 const emptyState = {
   date: '',
+  // 当前星光值。**页面上不显示这个数**，只有进度条的比例用到它，
+  // 所以这里留着但不写进任何一处模板文案
   value: 0,
-  pending: 0,
   banked: 0,
   todayCondensed: 0,
   todayEarned: 0,
+  rocoToday: 0,
+  rocoTotal: 0,
   maxDailyStars: 25,
   nextCost: null,
-  nextRemaining: null,
   tasks: [],
   logs: [],
   todayDraws: [],
@@ -352,20 +372,33 @@ const closeDetail = () => {
 // 所以卡片和弹窗上都补一个「（异色）」，不然看起来就是同一只精灵抽到了两次
 const displayName = (sprite) => (sprite.isShiny ? `${sprite.name}（异色）` : sprite.name)
 
-// 异色 / 地区形态 / 首领化抽到时星光值翻倍，每多一个标签再翻一倍，所以倍率是
-// 1 / 2 / 4 / 8。前端只管显示，判据留在后端一处，免得两边规则各写一遍再慢慢走偏。
+// 洛克贝的加成：异色 ×10，每个形态标签（地区形态 / 首领化各算一个）再 ×2，
+// 所以倍率是 1 / 2 / 4 / 10 / 20 / 40 —— **跟星光值那套（1/2/4/8）不是一套**，
+// 别把两边的函数或常量混着用。前端只管显示，判据留在后端一处，
+// 免得两边规则各写一遍再慢慢走偏。
 //
-// 卡片和弹窗上那行 `★` 显示的是**基础值**（蹦蹦果 60），加成靠后面那个 ×4 表示。
-// 记录里存的 star 是加完加成的数（240），所以要知道基础值得除回去。
+// 卡片和弹窗上那行显示的是**基础值**（1200），加成靠后面那个 ×10 表示。
+// 记录里存的 roco 是加完加成的数（12000），所以要知道基础值得除回去。
 //
 // 除回去就够，不用后端多发一个字段 —— 但**除数必须是当时那次的倍率**，不能按
-// 当前的规则重算：规则改过（原来不管几个标签都是 ×2），老记录一重算，除出来的
-// 基础值就跟着错。所以后端存记录时把倍率一起写进去了，这里读到的是当时那份。
-const baseStar = (sprite) => Math.round(sprite.star / (sprite.starMultiplier || 1))
+// 当前的规则重算：洛克贝这套规则以后要是改了，老记录一重算，除出来的基础值
+// 就跟着错。所以后端存记录时把倍率一起写进去了，这里读到的是当时那份。
+// 老记录（这次改动之前抽的）根本没有 roco，调用方先判 null 再进来。
+const baseRoco = (sprite) => Math.round(sprite.roco / (sprite.rocoMultiplier || 1))
 
 // 屏幕上只剩基础值了，实际进账多少就靠这句：鼠标停在小标上能看全。
-const boostTitle = (sprite) =>
-  `基础星光值 ${baseStar(sprite)}，${sprite.formLabel || '特殊形态'} ×${sprite.starMultiplier}，本次获得 ${sprite.star} 星光值`
+//
+// 「×10 · ×2」这两段是**分开写的**，不是笼统的「×20」—— 20 倍是异色和形态
+// 两件事叠出来的，只写 20 看不出这一点。后端只有在两段乘起来正好等于记录里
+// 那个总倍率时才把这俩因子给出来（见 spirits.js 的 rocoParts），给不出来
+// 就退回笼统写法，总之不能写出对不上账的说明。
+const rocoTitle = (sprite) => {
+  const parts = []
+  if (sprite.rocoShinyMultiplier > 1) parts.push(`异色 ×${sprite.rocoShinyMultiplier}`)
+  if (sprite.rocoFormMultiplier > 1) parts.push(`${sprite.formLabel || '特殊形态'} ×${sprite.rocoFormMultiplier}`)
+  const boost = parts.length ? parts.join(' · ') : `${sprite.formLabel || '特殊形态'} ×${sprite.rocoMultiplier}`
+  return `图鉴洛克贝 ${baseRoco(sprite)}，${boost}，本次获得 ${sprite.roco} 洛克贝`
+}
 
 const showModal = ref(false)
 const editingId = ref('')
@@ -386,27 +419,6 @@ const fetchState = async () => {
     }
   } catch (error) {
     console.error('Fetch starlight state error:', error)
-  }
-}
-
-// 不传 count —— 后端收到就是把待入库的全部收走。
-// 「全部」是按后端当下读到的待入库算的，所以并发点两下会各收一遍，
-// 后端那把锁是主力，这里只是别让手指头把请求打出去。
-const collecting = ref(false)
-const collectAll = async () => {
-  if (collecting.value) return
-  collecting.value = true
-  try {
-    const res = await starlightApi.collect(userStore.userId)
-    if (res.code === 0) {
-      state.value = { ...state.value, ...res.data.state }
-    } else {
-      alert(res.message || '入库失败')
-    }
-  } catch (error) {
-    alert('入库失败')
-  } finally {
-    collecting.value = false
   }
 }
 
@@ -495,10 +507,10 @@ const completeTask = async (task) => {
       state.value = { ...state.value, ...res.data.state }
       showResult({
         spirit: res.data.spirit,
-        earned: res.data.earned,
+        // 这次进账的洛克贝。**不是星光值** —— 页面上不显示星光值
+        rocoEarned: res.data.rocoEarned,
         // 这一下刚好够档位，凝结是当次就发生的，得说一声，不然星星是哪儿来的会看不懂
-        condensedNow: res.data.state.condensedNow,
-        spentNow: res.data.state.spentNow
+        condensedNow: res.data.state.condensedNow
       })
     } else {
       // 「今天的精灵都抽完了」也走这里，用同一块地方提示，不弹 alert 打断
@@ -533,10 +545,10 @@ onMounted(fetchState)
   color: rgba(255, 255, 255, 0.45);
 }
 
-/* 只剩「凝结许愿星总数」一张卡了，占满一行 */
+/* 许愿星、洛克贝各一张卡，并排。窄屏（见文件末尾的媒体查询）改回上下两张 */
 .overview {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -551,12 +563,20 @@ onMounted(fetchState)
   margin-bottom: 0.5rem;
 }
 
+/* 许愿星那套数用蓝色、洛克贝用金色（.overview-roco），两个体系的颜色从总览
+   一路贯到进度条、卡片和流水 —— 并排放的两个数颜色一样的话，
+   扫一眼分不出哪个是哪个 */
 .overview-value {
   font-size: 2.4rem;
   line-height: 1.1;
+  color: #7FB2FF;
+  text-shadow: 0 0 24px rgba(127, 178, 255, 0.3);
+  word-break: break-all;
+}
+
+.overview-roco {
   color: #FFD700;
   text-shadow: 0 0 24px rgba(255, 215, 0, 0.3);
-  word-break: break-all;
 }
 
 .overview-unit {
@@ -566,84 +586,28 @@ onMounted(fetchState)
   text-shadow: none;
 }
 
-/* 待入库那一块，嵌在「凝结许愿星总数」卡里（原来是自己一张卡）。
-   划一道细线跟上面的总数分开 —— 这两个数是两笔账（已入库 / 还在天上），
-   挨着放但不该看成一个数 */
-.overview-pending {
-  margin-top: 1.25rem;
-  padding-top: 1.25rem;
-  border-top: 1px solid rgba(255, 215, 0, 0.18);
-}
-
-.pending-title {
-  font-weight: 700;
-  font-size: 1.05rem;
-  color: #FFD700;
-  margin-bottom: 0.35rem;
-}
-
-.pending-hint {
-  font-size: 0.8rem;
+/* 大数下面那行「今天 +N」：比总数小一圈，免得两个数打架 */
+.overview-today {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
   color: rgba(255, 255, 255, 0.45);
-  margin-bottom: 1rem;
 }
 
-/* 整块是一个按钮：点哪儿都是「全部入库」。
-   星星居中 —— 这块现在站在一张居中的卡里，靠左会跟上面的数字错开一截 */
-.pending-stars {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.4rem;
-  width: 100%;
-  padding: 0.75rem;
-  border-radius: 12px;
-  border: 1px dashed rgba(255, 215, 0, 0.35);
-  background: rgba(255, 215, 0, 0.05);
-  cursor: pointer;
-  transition: all 0.2s ease;
+.overview-today b {
+  color: #7FB2FF;
 }
 
-.pending-stars:hover {
-  border-color: rgba(255, 215, 0, 0.75);
-  background: rgba(255, 215, 0, 0.14);
-  box-shadow: 0 6px 22px rgba(255, 215, 0, 0.18);
+.overview-today b.today-roco {
+  color: #FFD700;
 }
 
-.pending-stars:hover .pending-star {
-  transform: translateY(-3px);
-}
-
-.pending-stars:active {
-  transform: scale(0.99);
-}
-
-/* 收取请求在飞的时候：别让 hover 效果骗人，看起来还能点 */
-.pending-stars:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.pending-stars:disabled:hover {
-  border-color: rgba(255, 215, 0, 0.35);
-  background: rgba(255, 215, 0, 0.05);
-  box-shadow: none;
-}
-
-.pending-stars:disabled:hover .pending-star {
-  transform: none;
-}
-
-.pending-star {
-  font-size: 1.7rem;
-  line-height: 1;
-  transition: transform 0.2s ease;
-  animation: starFloat 2.4s ease-in-out infinite;
-}
-
-@keyframes starFloat {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
+/* 洛克贝图标。跟着字走，所以用 vertical-align 而不是 flex —— 它出现在标题、
+   卡片、流水好几个高度不一样的地方 */
+.roco-ico {
+  width: 1.05em;
+  height: 1.05em;
+  vertical-align: -0.18em;
+  margin-right: 0.25rem;
 }
 
 .progress-card {
@@ -659,7 +623,8 @@ onMounted(fetchState)
   margin-bottom: 0.6rem;
 }
 
-.progress-num {
+/* 右上角「今天第 2 / 25 颗」。**这里不写星光值**，只报颗数 */
+.progress-tier {
   color: #7FB2FF;
 }
 
@@ -677,20 +642,16 @@ onMounted(fetchState)
   transition: width 0.35s ease;
 }
 
+/* 凝满 25 颗那条满格。宽度写死在 CSS 里而不是靠 progressPercent ——
+   那时候 nextCost 是 null，算出来的是个假比例 */
+.progress-fill-full {
+  width: 100%;
+}
+
 .progress-note {
   margin-top: 0.6rem;
   font-size: 0.85rem;
   color: #B0B0B0;
-}
-
-.progress-note b {
-  color: #FFD700;
-}
-
-.tier-note {
-  margin-top: 0.5rem;
-  font-size: 0.78rem;
-  color: rgba(255, 255, 255, 0.35);
 }
 
 /* 抽到精灵的结果卡 */
@@ -770,9 +731,9 @@ onMounted(fetchState)
   vertical-align: -4px;
 }
 
-.result-star {
+.result-roco {
   font-size: 1.35rem;
-  color: #7FB2FF;
+  color: #FFD700;
 }
 
 .result-unit {
@@ -898,7 +859,7 @@ onMounted(fetchState)
   word-break: break-all;
 }
 
-.sprite-star {
+.sprite-roco {
   margin-top: 0.2rem;
   font-size: 0.8rem;
   color: #FFD700;
@@ -908,9 +869,9 @@ onMounted(fetchState)
   margin-bottom: 2rem;
 }
 
-/* 形态加成的「×N」小标（2/4/8）。`★` 上写的是图鉴基础值，这个标说明进账还要再翻，
-   不然用户会以为拿到的就是 60。实际到手多少在 title 里 */
-.star-boost {
+/* 加成的「×N」小标（2/4/10/20/40）。数字上写的是图鉴基础值，这个标说明进账
+   还要再翻，不然用户会以为拿到的就是 1200。实际到手多少在 title 里 */
+.roco-boost {
   display: inline-block;
   margin-left: 0.3rem;
   padding: 0 5px;
@@ -1029,13 +990,13 @@ onMounted(fetchState)
   color: #7FB2FF;
 }
 
-.spirit-star {
+.spirit-roco {
   margin-top: 0.85rem;
   font-size: 1.2rem;
-  color: #7FB2FF;
+  color: #FFD700;
 }
 
-.spirit-star-unit {
+.spirit-roco-unit {
   margin-left: 0.3rem;
   font-size: 0.8rem;
   color: #B0B0B0;

@@ -81,9 +81,9 @@ export const starlightApi = {
   createTask: (data) => api.post('/starlight/tasks', data),
   updateTask: (taskId, data) => api.put(`/starlight/tasks/${taskId}`, data),
   deleteTask: (taskId) => api.delete(`/starlight/tasks/${taskId}`),
-  completeTask: (taskId) => api.post(`/starlight/tasks/${taskId}/complete`),
-  // 不传 count 就是把待入库的全部收走
-  collect: (userId, count) => api.post('/starlight/collect', { userId, count })
+  completeTask: (taskId) => api.post(`/starlight/tasks/${taskId}/complete`)
+  // 原来还有个 collect（手动把待入库的许愿星收进总数），
+  // 现在凝结出来就直接进总数了，这条路径和后端那个接口一起去掉了
 }
 
 // 同步 API
