@@ -11,6 +11,27 @@ const { getPeriod } = require('../services/completions');
 //   - 别的时间型任务（比如设成 30 分钟的「运动」）不算工时
 const MINUTES_PER_UNIT = 25;
 
+// 时段只能是这四档（就是 getPeriod 的返回值）。快速记录现在允许用户自己选，
+// 传进来的值必须落在这个白名单里，别的一律挡掉。
+const PERIODS = ['morning', 'afternoon', 'evening', 'other'];
+
+// 日期串格式 YYYY-MM-DD。用的是 UTC 日期，跟记录页的日期选择器同一套口径
+// （整套记录系统都按 UTC 日期分桶，包括「今天」的默认值）。
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// 某一天是不是周末。**按日期算，不按 created_at 的本地星期算** ——
+// 记录是按 UTC 日期分桶的，「星期几」应该是那个桶的属性，同一个桶里的记录
+// 才只有一个说法。用本地 getDay() 的话，北京 0-8 点的记录（UTC 日期还停在
+// 前一天）会出现「桶算周五、却按周六翻倍」这种自相矛盾的算法。
+//
+// 注：completions.js 里任务完成那条路径还在用本地 now.getDay()，两处没统一
+// （统一会动到任务奖励，是另一件事）。实测现有 23 条记录全部落在北京 9-22 点，
+// 两套算法没有任何一条会算出不同结果 —— 所以这里动手不影响已有数据。
+function isWeekendDate(dateStr) {
+  const day = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
+}
+
 // 一条记录折算成多少分钟。折算不出来的返回 0。
 function minutesOf(record, taskMinutes) {
   // 周末加倍是星星奖励翻了倍，不代表多干了一倍的活，
@@ -30,10 +51,12 @@ function minutesOf(record, taskMinutes) {
 }
 
 // 快速记录（单次任务）
-// recordType: 'time' 时间型 | 'general' 通用型（不传按通用型）
+// recordType: 'time' 25min型 | 'general' 通用型（不传按通用型）
+// date: 记到哪一天（默认今天）。只允许往前，不允许未来
+// period: 算哪个时段（默认按当前时间判）
 router.post('/quick', async (req, res) => {
   try {
-    const { userId, taskName, stars, recordType } = req.body;
+    const { userId, taskName, stars, recordType, date, period } = req.body;
 
     if (!userId || !taskName || !stars) {
       return res.status(400).json({ code: 1, message: '缺少必要参数' });
@@ -42,42 +65,67 @@ router.post('/quick', async (req, res) => {
     const isTime = recordType === 'time';
 
     const now = new Date();
-    const date = now.toISOString().split('T')[0];
-    const timestamp = now.getTime();
+    const today = now.toISOString().split('T')[0];
 
-    // 周末加倍
+    // 补记到哪一天。默认今天，可以往前选，**不允许未来**（还没发生的事没法记），
+    // 往前的范围不设限。都是 YYYY-MM-DD 补零格式，字符串比大小就等于比日期。
+    const targetDate = date || today;
+    if (!DATE_RE.test(targetDate)) {
+      return res.status(400).json({ code: 1, message: '日期格式不对' });
+    }
+    if (targetDate > today) {
+      return res.json({ code: 1, message: '不能记录未来的日期' });
+    }
+    // 「补记」= 记的不是今天。只有这种才跳过今天的计数和掷骰子次数，见下。
+    const isBackdated = targetDate !== today;
+
+    // 时段默认按当前时间判；用户传了就用用户的（必须在白名单里）
+    const targetPeriod = period || getPeriod(now);
+    if (!PERIODS.includes(targetPeriod)) {
+      return res.status(400).json({ code: 1, message: '时段不对' });
+    }
+
+    // 周末加倍按**所选日期**的星期几算，不按今天 —— 补上周六的记录就该翻倍。
+    // 不这么算的话那条的工时（折算时要用翻倍前的星数）会跟着一起错。
+    const isWeekend = isWeekendDate(targetDate);
+
     let starsEarned = parseInt(stars);
-    const isWeekend = now.getDay() === 0 || now.getDay() === 6;
     if (isWeekend) {
       starsEarned *= 2;
     }
 
-    // 检查并重置今日星星和掷骰子计数（统一按 last_daily_date 判断跨天）
-    await ensureToday(req.redis, userId, date);
-
-    // 更新用户星星
+    const timestamp = now.getTime();
     const userKey = `wishstar:user:${userId}`;
 
+    // 跨天重置统一走这里。补记也要跑：它是「今天」那三个计数的唯一维护点，
+    // 跳过去只是把「已经翻篇」这件事推给下一个读接口，没有好处。
+    await ensureToday(req.redis, userId, today);
+
+    // 星星总数无条件加 —— 不管记的是哪天，星星确实是这个账号赚到的
     await req.redis.hincrby(userKey, 'current_stars', starsEarned);
     await req.redis.hincrby(userKey, 'total_stars', starsEarned);
-    await req.redis.hincrby(userKey, 'today_stars', starsEarned);
 
-    // 掷骰子次数只认「时间型」的星星：通用型点一下就有一颗，拿它换骰子等于无限刷
-    if (isTime) {
-      await req.redis.hincrby(userKey, 'today_time_stars', starsEarned);
+    // 「今天」的三项计数和掷骰子次数：**只有记的是今天才动**。
+    // 补记到过去那天一律不碰 —— 次数是「今天做了多久」的即时奖励，
+    // 补记就能换次数等于可以囤次数（补 40 颗时间型就白拿 8 次）。
+    // 而且过去那天的 today_* 是每人单份、按天重置的字段，生来就回填不进去。
+    if (!isBackdated) {
+      await req.redis.hincrby(userKey, 'today_stars', starsEarned);
+
+      // 掷骰子次数只认「25min 型」的星星：通用型点一下就有一颗，拿它换骰子等于无限刷
+      if (isTime) {
+        await req.redis.hincrby(userKey, 'today_time_stars', starsEarned);
+      }
+
+      // 25min 型星星每获得5颗，获得1次掷骰子次数（按今日累计计算）
+      const totalDiceCanGet = diceEarnedFrom(await req.redis.hget(userKey, 'today_time_stars'));
+      const earnedDiceCount = parseInt(await req.redis.hget(userKey, 'earned_dice_count')) || 0;
+      const diceCountToAdd = totalDiceCanGet - earnedDiceCount;
+      if (diceCountToAdd > 0) {
+        await req.redis.hincrby(userKey, 'today_dice_count', diceCountToAdd);
+        await req.redis.hincrby(userKey, 'earned_dice_count', diceCountToAdd);
+      }
     }
-
-    // 时间型星星每获得5颗，获得1次掷骰子次数（按今日累计计算）
-    const totalDiceCanGet = diceEarnedFrom(await req.redis.hget(userKey, 'today_time_stars'));
-    const earnedDiceCount = parseInt(await req.redis.hget(userKey, 'earned_dice_count')) || 0;
-    const diceCountToAdd = totalDiceCanGet - earnedDiceCount;
-    if (diceCountToAdd > 0) {
-      await req.redis.hincrby(userKey, 'today_dice_count', diceCountToAdd);
-      await req.redis.hincrby(userKey, 'earned_dice_count', diceCountToAdd);
-    }
-
-    // 记录到每日记录（使用北京时间）
-    const period = getPeriod(now);
 
     const record = {
       id: uuidv4(),
@@ -85,12 +133,17 @@ router.post('/quick', async (req, res) => {
       task_name: taskName,
       stars: starsEarned,
       type: isTime ? 'quick_time' : 'quick',
-      period,
+      period: targetPeriod,
+      // 这个标记是「period 是用户亲手选的」的凭证。读的时候（见 GET /）只认
+      // 带标记的 period，没标记的照旧按 created_at 现算 —— 老记录里存的 period
+      // 是被两套错算法写坏的，直接信会把那批坏数据放回来。见 docs 第 3 条。
+      period_source: 'user',
       is_weekend_double: isWeekend,
       created_at: timestamp
     };
 
-    await req.redis.zadd(`wishstar:records:${userId}:${date}`, timestamp, JSON.stringify(record));
+    // 记进**所选那天**的桶里（不是今天），记录页翻到那天就能看到
+    await req.redis.zadd(`wishstar:records:${userId}:${targetDate}`, timestamp, JSON.stringify(record));
 
     // 记录流水
     const log = {
@@ -98,7 +151,8 @@ router.post('/quick', async (req, res) => {
       type: 'income',
       category: 'quick',
       amount: starsEarned,
-      description: `快速记录「${taskName}」获得${starsEarned}颗星星${isWeekend ? '（周末加倍）' : ''}`,
+      description: `快速记录「${taskName}」获得${starsEarned}颗星星${isWeekend ? '（周末加倍）' : ''}` +
+        (isBackdated ? `（补记 ${targetDate}）` : ''),
       created_at: timestamp
     };
     await req.redis.zadd(`wishstar:logs:${userId}`, timestamp, JSON.stringify(log));
@@ -107,6 +161,8 @@ router.post('/quick', async (req, res) => {
       code: 0,
       data: {
         record,
+        date: targetDate,
+        isBackdated,
         isWeekendDouble: isWeekend
       }
     });
@@ -139,13 +195,20 @@ router.get('/', async (req, res) => {
       if (m) taskMinutes[id] = m;
     }
 
-    // 时段一律**按 created_at 现算**，不信记录里存的那个 period 字段。
+    // 时段的**默认值按 created_at 现算**，但**用户手选的时段优先**：
+    // 只有新写入的快速记录带 period_source: 'user'（就是弹窗里自己选了时段的那种）。
     //
-    // 存的那份是写入当时的快照，而历史上有过两种算法（见 completions.js 的
-    // getPeriod 注释），凌晨和晚上的记录都被判错过；现算顺带把老数据也修正过来。
-    // 只写不读，那个字段就退化成排查问题时看的原始值。
+    // 默认按 created_at 现算，是因为老记录里存的 period 是写入当时的快照，
+    // 而历史上有过两种算法（见 completions.js 的 getPeriod 注释），凌晨和晚上的
+    // 记录都被判错过；现算顺带把老数据也修正过来。
+    //
+    // 这里区分的是「是不是用户亲手选的」，**不是**「period 字段有没有值」——
+    // 直接信 period 会把上面那批坏数据一起放回来。
     // 没存 created_at 的老记录退回用存的那份，再没有就归「其他」。
-    const periodOf = (r) => (r.created_at ? getPeriod(new Date(r.created_at)) : (r.period || 'other'));
+    const periodOf = (r) => {
+      if (r.period_source === 'user' && PERIODS.includes(r.period)) return r.period;
+      return r.created_at ? getPeriod(new Date(r.created_at)) : (r.period || 'other');
+    };
 
     // 统计各时段星星 + 工时。「其他」（0-6 点）单列一格
     let totalStars = 0;

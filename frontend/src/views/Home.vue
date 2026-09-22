@@ -87,7 +87,7 @@
           <span class="action-icon">✓</span>
           <span class="action-text">完成任务</span>
         </button>
-        <button class="action-btn" @click="showQuickRecord = true">
+        <button class="action-btn" @click="openQuickRecord">
           <span class="action-icon">⚡</span>
           <span class="action-text">快速记录</span>
         </button>
@@ -111,6 +111,31 @@
           <input v-model.number="quickStars" type="number" class="input" placeholder="输入星星数量" />
         </div>
         <div class="form-group">
+          <label class="label">日期 / 时段</label>
+          <div class="field-row">
+            <input v-model="quickDate" type="date" class="input" :max="quickToday" />
+            <select v-model="quickPeriod" class="input">
+              <!-- 四个名字跟记录页仪表盘那一排（早上/下午/晚上/其他）**逐字对上**，
+                   同一个桶不能两处两个名字。0-6 点那档仪表盘就叫「其他」，
+                   这里也只加个时段注解，别改叫「凌晨」 -->
+              <option value="morning">早上（6-13 点）</option>
+              <option value="afternoon">下午（13-18 点）</option>
+              <option value="evening">晚上（18-24 点）</option>
+              <option value="other">其他（0-6 点）</option>
+            </select>
+          </div>
+
+          <!-- 补记：这一笔不进今天的计数、也不换掷骰子次数，得先说清楚，
+               不然第二天看到「今日获得星星」没变会以为没记上 -->
+          <p v-if="isBackdated" class="quick-time-hint backdated-hint">
+            📌 补记到 <strong>{{ quickDate }}</strong>：星星算进总数、记录写进那一天，
+            但<b>不算进今天的「今日获得星星」，也不给掷骰子次数</b>。
+            <template v-if="quickWeekend">
+              <br />那天是周末，星星照样翻倍（工时按翻倍前的星数算）。
+            </template>
+          </p>
+        </div>
+        <div class="form-group">
           <label class="label">任务类型</label>
           <div class="radio-group">
             <label class="radio-label">
@@ -119,15 +144,15 @@
             </label>
             <label class="radio-label">
               <input type="radio" value="time" v-model="quickType" />
-              ⏱ 时间型（星星计入掷骰子次数）
+              ⏱ 25min 型（星星计入掷骰子次数，并按 25 分钟/颗折算工时）
             </label>
           </div>
 
-          <!-- 标成时间型才会折算工时。这里实时算一遍，省得去记录页才发现对不上 -->
+          <!-- 标成 25min 型才会折算工时。这里实时算一遍，省得去记录页才发现对不上 -->
           <p v-if="quickType === 'time'" class="quick-time-hint">
             本次 = <strong>{{ quickMinutesText }}</strong> 工时（1 颗星 = 25 分钟）
-            <template v-if="isWeekendToday">
-              <br />今天周末，星星会翻倍，但<b>工时按翻倍前的星数算</b>，不会跟着翻倍
+            <template v-if="quickWeekend">
+              <br />{{ isBackdated ? '那天' : '今天' }}是周末，星星会翻倍，但<b>工时按翻倍前的星数算</b>，不会跟着翻倍
             </template>
           </p>
         </div>
@@ -226,18 +251,55 @@ const starsToNextRoll = computed(() => {
   return rest === 0 ? 5 : 5 - rest
 })
 
+// ---- 快速记录的补记：日期 + 时段 ----
+
+// 日期用 **UTC 日期串**，跟记录页的日期选择器同一套口径（记录都按 UTC 日期分桶）。
+// 别改成 toLocaleDateString —— 那样同一个「昨天」在两个页面会指向不同的桶。
+const todayStr = () => new Date().toISOString().split('T')[0]
+const quickToday = todayStr()
+const quickDate = ref(quickToday)
+
+// 时段默认跟着当前时间判，口径跟后端 getPeriod() 一致：
+// 早上 6-13、下午 13-18、晚上 18-24、其他 0-6（名字都用仪表盘那一排的）。
+//
+// 北京时间不能写成 (getHours() + 8) % 24 —— 本地时区本来就是 UTC+8 时
+// 等于又加了 8 小时（后端 records.js 历史上就踩过这个坑）。用 UTC 小时 +8
+// 才对所有时区都成立。
+const beijingHour = (d) => (d.getUTCHours() + 8) % 24
+const autoPeriod = () => {
+  const h = beijingHour(new Date())
+  if (h >= 6 && h < 13) return 'morning'
+  if (h >= 13 && h < 18) return 'afternoon'
+  if (h >= 18) return 'evening'
+  return 'other'
+}
+const quickPeriod = ref(autoPeriod())
+
+// 记的不是今天 = 补记。只有补记才会跳过今天的计数和掷骰子次数
+const isBackdated = computed(() => quickDate.value !== quickToday)
+
+// 所选那天是不是周末。**按日期算**（UTC 星期），跟后端 isWeekendDate 同一套 ——
+// 周末加倍是「那一天」的属性，所以补上周六的记录照样翻倍。
+// 也不能用本地 getDay()：北京 0-8 点的记录 UTC 日期还停在前一天，会自相矛盾。
+const quickWeekend = computed(() => {
+  const day = new Date(`${quickDate.value}T00:00:00Z`).getUTCDay()
+  return day === 0 || day === 6
+})
+
+// 每次打开弹窗都把日期和时段拉回默认值。上一次可能补记过某一天，
+// 留着的话**下一次记录会被静默补到那天去** —— 这种错很难自己发现。
+const openQuickRecord = () => {
+  quickDate.value = todayStr()
+  quickPeriod.value = autoPeriod()
+  showQuickRecord.value = true
+}
+
 // ---- 快速记录的工时预览 ----
 //
 // 规则跟后端 records.js 的 minutesOf() 必须一致，不然预览和记录页会对不上：
-//   - 只有标成「时间型」的才折算工时
+//   - 只有标成「25min 型」的才折算工时
 //   - 1 颗星 = 25 分钟
 //   - 周末星星翻倍，但那是奖励不是工时，要按翻倍前的星数算
-
-// 今天是不是周末。用本地日期，跟后端 completions.js 的 now.getDay() 是同一套。
-const isWeekendToday = computed(() => {
-  const day = new Date().getDay()
-  return day === 0 || day === 6
-})
 
 const quickMinutes = computed(() => {
   if (quickType.value !== 'time') return 0
@@ -340,7 +402,11 @@ const submitQuickRecord = async () => {
       userId: userStore.userId,
       taskName: quickTaskName.value,
       stars: quickStars.value,
-      recordType: quickType.value
+      recordType: quickType.value,
+      // 日期 / 时段 / 是不是补记全由后端判，前端只把用户选的送过去。
+      // 后端还会自己挡一次未来日期 —— 这里的 :max 只是顺手，不是防线
+      date: quickDate.value,
+      period: quickPeriod.value
     })
 
     if (res.code === 0) {
@@ -348,6 +414,9 @@ const submitQuickRecord = async () => {
       quickTaskName.value = ''
       quickStars.value = 5
       quickType.value = 'general'
+      // 日期和时段也复位，别让补记过的那天留在弹窗里
+      quickDate.value = todayStr()
+      quickPeriod.value = autoPeriod()
       await refreshAll()
     } else {
       alert(res.message || '记录失败')
@@ -581,12 +650,45 @@ const submitQuickRecord = async () => {
   font-size: 0.9rem;
 }
 
+/* 日期 + 时段并排一行。`.input` 全局是 width:100%，并排就得让它们改弹性的，
+   不然两个都去抢整行宽，第二个会被挤到下一行 */
+.field-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.field-row > * {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+}
+
+/* 日期框自带的日历图标在深色底上默认是暗的，看不见。color-scheme 让浏览器
+   按深色主题画原生控件（图标跟着变亮） */
+.field-row input[type="date"] {
+  color-scheme: dark;
+}
+
 /* 工时预览：是注解不是表单，所以压小、压暗，别抢上面的输入框 */
 .quick-time-hint {
   margin: 0.75rem 0 0;
   font-size: 0.8rem;
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.5);
+}
+
+/* 补记那条提示要比工时预览显眼：它说的是「这一笔不进今天的数」，
+   看漏了会以为没记上。所以给它换成琥珀色描边（同 .modal-warn 那一套） */
+.backdated-hint {
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(255, 165, 0, 0.1);
+  border: 1px solid rgba(255, 165, 0, 0.28);
+  color: #FFC46B;
+}
+
+.backdated-hint strong {
+  color: #FFD98A;
 }
 
 .quick-time-hint strong {
