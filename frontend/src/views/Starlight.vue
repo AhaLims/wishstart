@@ -136,21 +136,32 @@
           </div>
         </div>
         <div class="task-actions">
-          <!-- 按钮**照着后端给的 actions 渲染**，前端不自己判断 status ——
+          <!-- 推进状态的按钮**照着后端给的 actions 渲染**，前端不自己判断 status ——
                状态机只在 services/starlight.js 的 TASK_ACTIONS 里有一份，
                这里再写一遍 if (status === 'doing') 就早晚会跟后端走偏。
-               这里只负责把动作 key 映射成按钮样式 -->
+               这两个都抽卡，给绿色 -->
           <button
             v-for="act in task.actions"
             :key="act.key"
-            class="btn btn-sm"
-            :class="actionClass(act.key)"
+            class="btn btn-success btn-sm"
             :disabled="actingId === task.id"
             @click="runAction(task, act)"
           >
             {{ actingId === task.id ? '···' : act.label }}
           </button>
+
+          <!-- 「编辑」和「删除」**是写死的按钮，不走 actions** —— 它俩跟状态机无关：
+               编辑只改名字，「删除」是这条整个抹掉（不转状态，走 DELETE）。
+               这也正是后端 actions 表里没有 abandon 的原因，见 services/starlight.js。
+               删除用红色：它是这一行里唯一不可逆的动作 -->
           <button class="btn btn-primary btn-sm" @click="openEdit(task)">编辑</button>
+          <button
+            class="btn btn-danger btn-sm"
+            :disabled="actingId === task.id"
+            @click="removeTask(task)"
+          >
+            删除
+          </button>
         </div>
       </div>
     </div>
@@ -163,15 +174,21 @@
     <!-- 加一条：常驻在列表下面的一条输入行，不再弹框（docs 9.10）。
          待办是「想到什么就加什么」的高频动作，弹框要先点按钮、写完再点保存，
          等于把最轻的一步做成了最重的。回车就加，加完光标留在输入框里，
-         可以连着敲三四条 -->
+         可以连着敲三四条。
+
+         **是 <textarea> 不是 <input>**：任务名里可能要换行（Shift+回车），
+         <input> 根本存不住 \n —— 它会按 HTML 规范把换行悄悄吃掉。
+         回车和 Shift+回车怎么分见下面的 onAddEnter -->
     <div class="task-add">
-      <input
+      <textarea
         ref="addInput"
         v-model="newName"
         class="input task-add-input"
-        placeholder="加一条要做的事，回车就行"
-        @keyup.enter="addTask"
-      />
+        rows="1"
+        placeholder="加一条要做的事，回车就行（Shift+回车换行）"
+        @keydown.enter.exact="onAddEnter"
+        @input="autoGrow($event.target)"
+      ></textarea>
       <button
         class="btn btn-primary btn-sm"
         :disabled="!newName.trim() || adding"
@@ -183,6 +200,8 @@
     <p v-if="addError" class="form-error task-add-error">{{ addError }}</p>
 
     <!-- 已完成 / 已放弃：划掉的东西沉到这儿（docs 9.5）。
+         新产生的只有「已完成」——「已放弃」是 2026-09-23 之前留下的老数据
+         （那个出口现在改成真删了，见 docs 9.6），下面的标签和样式留着给它用。
          默认只展开最近几条，多的折起来 —— 待办做完是永久划掉的、只增不减，
          全展开会把页面撑爆，而人只看最近划掉的那几条 -->
     <div v-if="state.finished.length" class="finished-block">
@@ -200,7 +219,7 @@
           <span class="finished-name">{{ task.name }}</span>
           <span v-if="task.status === 'abandoned'" class="finished-tag">已放弃</span>
           <span class="finished-date">{{ formatTime(task.resolved_at) }}</span>
-          <button class="finished-del" title="删掉这条记录" @click="removeTask(task)">×</button>
+          <button class="finished-del" title="彻底删掉这条记录" @click="removeTask(task)">×</button>
         </div>
       </div>
       <p v-if="!showAllFinished && hiddenFinished > 0" class="finished-more">
@@ -297,7 +316,18 @@
 
         <div class="form-group">
           <label class="label">任务名称</label>
-          <input v-model="form.name" class="input" placeholder="比如：开始任务" @keyup.enter="save" />
+          <!-- 这里也必须是 <textarea>：名字里本来就可能有换行，用 <input> 的话
+               一打开弹框换行就被浏览器吃掉，保存下去等于把名字改短了。
+               回车存、Shift+回车换行，跟列表下面那条输入行同一套规矩 -->
+          <textarea
+            ref="editInput"
+            v-model="form.name"
+            class="input task-edit-input"
+            rows="2"
+            placeholder="比如：开始任务"
+            @keydown.enter.exact="onEditEnter"
+            @input="autoGrow($event.target)"
+          ></textarea>
         </div>
 
         <p class="form-hint">
@@ -366,7 +396,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useUserStore } from '../stores/user'
 import { starlightApi, collectionApi } from '../api'
 import Toast from '../components/Toast.vue'
@@ -412,7 +442,7 @@ const notice = ref(null)
 let noticeTimer = null
 
 // 正在处理的任务 id（空串 = 没有请求在飞），用来在请求期间禁用这条的所有按钮。
-// 开始 / 完成 / 放弃三个动作共用它 —— 它们都得防连点
+// 开始 / 完成（外加「删除」，它不设这个值，但读它来禁用自己）共用 —— 它们都得防连点
 const actingId = ref('')
 
 // 已完成区是否展开到全部。默认只显示最近几条（见下面 visibleFinished）
@@ -531,6 +561,53 @@ const adding = ref(false)
 const addError = ref('')
 const addInput = ref(null)
 
+// 编辑弹框里那个名字框（也是 textarea，理由见模板里的注释）
+const editInput = ref(null)
+
+// 名字框跟着内容长高。**先归零再读 scrollHeight** —— 不归零的话它只会越撑越高，
+// 删掉几行也不会缩回去（scrollHeight 是「内容有多高」，不是「该有多高」）。
+// 两个框共用这一个函数，调用处直接传 $event.target，不用各自养一个 ref
+//
+// **末尾那截 offsetHeight - clientHeight 不能省**（就是上下两道边框，2px）：
+// scrollHeight 量的是「边框以内」的内容高度，而这几行设的 height 走的是
+// border-box —— 边框要从这个高度里再刨掉，所以直接写成 scrollHeight 的话，
+// 内容区永远比自己的内容矮 2px，第二行一开始就会常驻一条滚动条。
+// 补上这一截，高度才刚好等于内容 + 边框。
+const autoGrow = (el) => {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`
+}
+
+// 任务名可以换行，但 confirm 和浮窗都是单行的排版：名字里那个 \n 直接塞进去，
+// 引号里会折行、浮窗会被撑成两行。显示之前把换行压成一个空格。
+// **只用在「说给人听」的地方**（确认框、浮窗标题），别拿它去改要存的名字
+const oneLine = (name) => String(name || '').replace(/\s*\n\s*/g, ' ')
+
+// 列表下面那条输入行的回车。回车提交、Shift+回车换行。
+//
+// 处理函数挂在 `@keydown.enter.exact` 上：`.exact` 是「不带任何修饰键」，
+// 所以按住 Shift 时这个函数根本不会跑，换行就走 textarea 自己的默认行为 ——
+// 不用自己去插 '\n'（自己插的话光标位置、撤销栈都得自己管）。
+//
+// 两个坑：
+// 1. **不能用 `.prevent` 修饰符**。修饰符跑在处理函数之前，那样中文输入法
+//    选字时那个回车也会被挡掉，候选词就选不了了。要挡的在函数里挡。
+// 2. 输入法选字那一下也是回车（isComposing / keyCode 229）。不认出来的话，
+//    打「写周报」选「周」的时候就把半截名字提交上去了
+const onAddEnter = (e) => {
+  if (e.isComposing || e.keyCode === 229) return
+  // 不 preventDefault 的话，提交完 textarea 还会自己多插一个空行
+  e.preventDefault()
+  addTask()
+}
+
+const onEditEnter = (e) => {
+  if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  save()
+}
+
 const fetchState = async () => {
   try {
     const res = await starlightApi.getState(userStore.userId)
@@ -558,6 +635,9 @@ const openEdit = (task) => {
   form.value = { name: task.name }
   formError.value = ''
   showModal.value = true
+  // 弹框渲染出来才量得到那个 textarea（v-if 之前它根本不在 DOM 里）。
+  // 名字是多行的话，得按内容撑开，不然要滚动才看得全
+  nextTick(() => autoGrow(editInput.value))
 }
 
 const closeModal = () => {
@@ -574,6 +654,8 @@ const validateForm = () => {
 // 请求跑着的时候先挡住重复提交，回来再清空 —— 加失败的话名字还留在
 // 输入框里，不用重敲一遍。成功后把光标按回去，好接着敲下一条
 const addTask = async () => {
+  // trim 只吃掉首尾的空白（含首尾的空行），**中间那些换行原样留着** ——
+  // 名字里的换行是用户按 Shift+回车敲出来的，不能被 trim 抹平
   const name = newName.value.trim()
   if (!name || adding.value) return
 
@@ -585,6 +667,10 @@ const addTask = async () => {
     if (res.code === 0) {
       newName.value = ''
       await fetchState()
+      // 清空之后框子缩回一行。**得等 DOM 更新完再量** ——
+      // 名字虽然在 ref 里没了，元素上还是旧文本，这会儿量到的还是旧高度
+      await nextTick()
+      autoGrow(addInput.value)
       if (addInput.value) addInput.value.focus()
     } else {
       addError.value = res.message || '没加上'
@@ -620,18 +706,24 @@ const save = async () => {
   }
 }
 
-// **只有已完成区调这个** —— 待办 / 进行中的不给删除按钮，不想做了走「放弃」
-// （放弃会留一条记录，删除是把痕迹也抹掉，那是两回事，见 docs 9.5 / 9.6）
+// 真删：记录和两个索引一起清掉，找不回来。**待办区和已完成区都调它**
+// （待办上那个出口 2026-09-23 从「放弃」改成了直接删，docs 9.6）——
+// 两处是同一件事，所以只留这一个函数，别再写一份。
+//
+// 不可逆，所以问一下再动手。确认框里把「找不回来」说出来，
+// 别写成「确定吗」这种问完也不知道后果长什么样的句子
 const removeTask = async (task) => {
-  if (!confirm(`确定删掉「${task.name}」这条记录吗？`)) return
+  if (!confirm(`确定删掉「${oneLine(task.name)}」吗？删了就找不回来了。`)) return
 
   try {
     const res = await starlightApi.deleteTask(task.id)
     if (res.code === 0) {
       await fetchState()
+    } else {
+      showNotice({ text: res.message || '删除失败' }, 'error')
     }
   } catch (error) {
-    alert('删除失败')
+    showNotice({ text: '删除失败' }, 'error')
   }
 }
 
@@ -644,24 +736,18 @@ const showNotice = (payload, type = 'success') => {
   }, 3500)
 }
 
-// 动作 key → 接口。三个动作长得一样，只有「放弃」不抽卡
+// 动作 key → 接口。这里只剩两个，都抽卡（「删除」不在这套里，见 removeTask）
 const ACTION_API = {
   start: starlightApi.startTask,
-  complete: starlightApi.completeTask,
-  abandon: starlightApi.abandonTask
+  complete: starlightApi.completeTask
 }
 
-// 动作 key → 按钮样式。开始和完成共用绿色：**它俩永不同时出现**（待办上只有开始，
-// 进行中只有完成，由后端的状态机保证），所以不用担心分不清哪个是主行动。
-// 放弃用红色：它不可逆（划掉就进已完成区了），得有点分量
-const actionClass = (key) => (key === 'abandon' ? 'btn-danger' : 'btn-success')
-
-// 一条待办的一个动作。act 是后端 actions 数组里的那一项（{ key, label, draw }）
+// 一条待办的一个动作。act 是后端 actions 数组里的那一项（{ key, label, draw }）。
+//
+// **两个动作都不问确认**：「完成」本来就是这一步的终点，多一次确认反而把
+// 「点一下就有奖励」的手感打断了。（原来「放弃」在这儿问过一次 —— 它不可逆、
+// 而且得说清「不真删」；现在那个出口改成了真删，走 removeTask，那条确认也跟着搬过去了）
 const runAction = async (task, act) => {
-  // 放弃是不可逆的，问一下。「开始」和「完成」不问 —— 完成本来就是这一步的终点，
-  // 多一次确认反而把「点一下就有奖励」的手感打断了
-  if (act.key === 'abandon' && !confirm(`确定放弃「${task.name}」吗？放弃之后不能再抽卡了。`)) return
-
   // 一次只放一个动作过去。浮窗是不挡操作的（点按钮不会被弹窗挡住），
   // 所以更得防连点：连点两下「开始」会一条任务抽走两只精灵，还破坏「不放回」的语义。
   // 后端有一把按用户分的锁兜底，这里挡在第一线。
@@ -680,9 +766,8 @@ const runAction = async (task, act) => {
       } else if (res.data.noDraw) {
         // 完成了，但今天精灵抽完了：**事记上了、只是没抽到卡**。不说一声的话
         // 会以为这条白干了（后端为什么放行见 docs 9.3）
-        showNotice({ text: `「${res.data.taskName}」记上了 · ${res.data.noDraw}` }, 'error')
+        showNotice({ text: `「${oneLine(res.data.taskName)}」记上了 · ${res.data.noDraw}` }, 'error')
       }
-      // 「放弃」两样都没有：划掉就行，不弹东西
     } else {
       // 状态不对（对一条待办点「完成」）和「今天的精灵都抽完了」都走这里，
       // 用同一条浮窗提示，不弹 alert 打断
@@ -712,7 +797,8 @@ const showSpiritNotice = (data) => {
   showNotice({
     // 头像加载失败过就整块不传，让 Toast 那格不渲染（不然是个破图）
     thumb: broken.value[spirit.id] ? '' : cardImage(spirit),
-    title: `${label}「${data.taskName}」`,
+    // 名字可能是多行的，浮窗标题只排得下一行 —— 换行压成空格再放进去
+    title: `${label}「${oneLine(data.taskName)}」`,
     text: `No.${spirit.number} ${displayName(spirit)} · +${data.rocoEarned} 洛克贝${condensed}`,
     badge: spirit.rocoMultiplier > 1
       ? { text: `${baseRoco(spirit)}×${spirit.rocoMultiplier}`, title: rocoTitle(spirit) }
@@ -1180,9 +1266,25 @@ onUnmounted(() => {
    区分开 —— 一眼看出它不是一个任务，是个输入的地方；聚焦了才变实线 */
 .task-add {
   display: flex;
-  align-items: center;
+  /* 按钮贴着底边。输入框按内容长高（Shift+回车换行），居中的话
+     每多一行按钮就往下飘一点，看着像在跟着动 */
+  align-items: flex-end;
   gap: 0.6rem;
   margin-top: 1rem;
+}
+
+/* 任务名的输入框是 <textarea>，得把几样默认行为关掉：
+   - resize: none —— 右下角那个拖拽把手不要，高度是按内容算出来的，不是拖出来的
+   - overflow-y: auto —— 高度由 autoGrow 设成内容高度，正常不会出现滚动条；
+     名字长到超过 max-height 时才滚（配 overflow: hidden 的话超出的部分会被切掉、
+     滚也滚不到，那就真看不见了）
+   - max-height —— 名字最多几行，别让一个输入框把整页撑爆 */
+.task-add-input,
+.task-edit-input {
+  resize: none;
+  overflow-y: auto;
+  max-height: 40vh;
+  line-height: 1.5;
 }
 
 .task-add-input {
@@ -1216,6 +1318,10 @@ onUnmounted(() => {
 .task-name {
   font-size: 1.05rem;
   font-weight: 700;
+  /* 任务名里可能有换行（输入框里 Shift+回车敲的），这里得把 \n 当换行渲染。
+     用 pre-line 不用 pre：pre 连连续空格也一起留着，名字里手滑多打的空格
+     会在卡片上留出一个大洞 */
+  white-space: pre-line;
 }
 
 .task-meta {
@@ -1302,9 +1408,14 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.5);
   text-decoration: line-through;
   text-decoration-color: rgba(255, 255, 255, 0.35);
+  /* 跟待办卡片一样：名字里的换行留着（删除线跨多行也照划） */
+  white-space: pre-line;
 }
 
-/* 放弃的比完成的更淡一点，再挂个标签 —— 它跟「做完了」不是一回事 */
+/* 放弃的比完成的更淡一点，再挂个标签 —— 它跟「做完了」不是一回事。
+   **这块只服务老数据了**：2026-09-23 起不再产生 abandoned（待办上那个出口
+   改成了直接删，见 docs 9.6），但库里那批老任务还在已完成区里显示，
+   所以样式别删 —— 删了两边的「已放弃」就长得跟「已完成」一样了 */
 .finished-abandoned .finished-name {
   color: rgba(255, 255, 255, 0.32);
   text-decoration-color: rgba(255, 255, 255, 0.22);

@@ -84,12 +84,15 @@ export const starlightApi = {
   getState: (userId) => api.get(`/starlight?userId=${userId}`),
   createTask: (data) => api.post('/starlight/tasks', data),
   updateTask: (taskId, data) => api.put(`/starlight/tasks/${taskId}`, data),
+  // 真删：记录和两个索引一起清掉，找不回来。**待办区和已完成区的「删除」共用它**
+  // （docs 9.6）—— 待办上那个出口 2026-09-23 从「放弃」改成了直接删
   deleteTask: (taskId) => api.delete(`/starlight/tasks/${taskId}`),
-  // 一条待办的三个动作（docs 9.2）。**「开始」和「完成」都各抽一次精灵**，
-  // 「放弃」不抽 —— 所以三个都是 POST，只有前两个会返回 spirit
+  // 一条待办的两个动作（docs 9.2）。**两个都各抽一次精灵**，所以都是 POST，
+  // 都会返回 spirit（「完成」赶上今天抽完了那次是 null）
   startTask: (taskId) => api.post(`/starlight/tasks/${taskId}/start`),
   completeTask: (taskId) => api.post(`/starlight/tasks/${taskId}/complete`),
-  abandonTask: (taskId) => api.post(`/starlight/tasks/${taskId}/abandon`)
+  // 「删除」不在这一组里：它不推进状态，是把这条整个抹掉（见上面 deleteTask）。
+  // 原来还有个 abandonTask，2026-09-23 跟后端那条路由一起删了
   // 原来还有个 collect（手动把待入库的许愿星收进总数），
   // 现在凝结出来就直接进总数了，这条路径和后端那个接口一起去掉了
 }

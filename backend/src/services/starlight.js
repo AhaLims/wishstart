@@ -47,12 +47,16 @@ const STAR_COSTS = [
 // 一天最多凝结 25 颗
 const MAX_DAILY_STARS = STAR_COSTS.length;
 
-// 待办的状态机：todo → doing → done，todo / doing 都能 abandoned（见 docs 9.2）。
+// 待办的状态机：todo → doing → done（见 docs 9.2）。
 // **状态只加在任务 hash 自己的字段里，不新增 key 类型**（sync 导出只认
 // hash / set / zset / list，开一个 string 类型的 key 会在快照里静默消失）。
 const TASK_TODO = 'todo';
 const TASK_DOING = 'doing';
 const TASK_DONE = 'done';
+// **历史状态，2026-09-23 起不再产生**：原来 todo / doing 上有个「放弃」动作
+// 转到这儿，用户觉得不直观、而且点了东西还留在页面上，改成了直接删（见 docs 9.6）。
+// 老数据里还有一批这样的任务要在已完成区显示，所以这个常量和下面那条文案
+// **得留着**，别当成没人用的死代码清掉。
 const TASK_ABANDONED = 'abandoned';
 
 const TASK_STATUS_LABEL = {
@@ -65,15 +69,16 @@ const TASK_STATUS_LABEL = {
 // 一条待办允许的动作表。**这是「什么状态能点什么」的唯一判据** ——
 // 路由和前端提示都从这儿推，别在别处再写一遍 if (status === 'doing')，
 // 两处早晚会走偏。
+//
+// **这里只有「推进状态」的动作**。「删除」不在表里 —— 它不改变状态、是把这条
+// 整个抹掉（DELETE /tasks/:taskId，待办区和已完成区共用同一个接口），
+// 不属于状态机。别为了让它出现在按钮行里就硬塞进来。
 const TASK_ACTIONS = {
   start: {
     from: [TASK_TODO], to: TASK_DOING, draw: true, label: '开始'
   },
   complete: {
     from: [TASK_DOING], to: TASK_DONE, draw: true, label: '完成'
-  },
-  abandon: {
-    from: [TASK_TODO, TASK_DOING], to: TASK_ABANDONED, draw: false, label: '放弃'
   }
 };
 
@@ -347,10 +352,10 @@ async function drawForTask(store, task, now) {
   return { spirit: enrichDraw(draw), earned, rocoEarned };
 }
 
-// 推进一条待办：开始 / 完成 / 放弃（见 docs 9）。
+// 推进一条待办：开始 / 完成（见 docs 9）。
 //
-// **三个动作走同一个函数**，是因为它们要抢同一把锁 —— 抽卡本身必须串行
-// （见 drawForTask），而状态转移也得跟抽卡在同一段临界区里：分开写三个函数，
+// **两个动作走同一个函数**，是因为它们要抢同一把锁 —— 抽卡本身必须串行
+// （见 drawForTask），而状态转移也得跟抽卡在同一段临界区里：分开写两个函数，
 // 「开始」连点两下就会各自读到旧的 status、各抽一只精灵，白送一只。
 //
 // 返回 { error } 时调用方原样把 message 给前端；成功时 state 是刷新过的全量状态。
@@ -400,13 +405,12 @@ async function advanceTask(store, task, action, now = new Date()) {
       // 所以新数据里它只能是 1；老数据里那个 16 是「以前能反复完成」的痕迹，不动它
       updates.complete_count = String((parseInt(fresh.complete_count) || 0) + 1);
     }
-    if (action === 'abandon') updates.resolved_at = String(at);
 
     await store.hset(taskKey(fresh.id), updates);
 
     // 进终态：从待办索引挪到已完成索引。**两把索引都要动** —— 只往新的里加、
     // 不往旧的里删，待办区会继续列出这条已经划掉的（它 hgetall 出来是 done）
-    if (spec.to === TASK_DONE || spec.to === TASK_ABANDONED) {
+    if (spec.to === TASK_DONE) {
       await store.srem(taskIndexKey(userId), fresh.id);
       await store.zadd(doneIndexKey(userId), at, fresh.id);
     }
@@ -416,7 +420,8 @@ async function advanceTask(store, task, action, now = new Date()) {
       action,
       status: spec.to,
       taskName: fresh.name,
-      // 「开始」和「完成」都抽卡，都有一个结果卡；「放弃」不抽，这两个是 null
+      // 表里剩下的两个动作都抽卡，所以正常都有结果卡。保留三元是给
+      // 「完成」抽不出精灵那条路径（那时 noDraw 有值、spirit 是 null）
       spirit: draw ? draw.spirit : null,
       earned: draw ? draw.earned : 0,
       rocoEarned: draw ? draw.rocoEarned : 0,

@@ -38,7 +38,7 @@ function withActions(task) {
     statusLabel: TASK_STATUS_LABEL[status],
     actions: Object.entries(TASK_ACTIONS)
       .filter(([, spec]) => spec.from.includes(status))
-      // draw 告诉前端点这个会不会弹精灵结果卡（「放弃」不抽，就没有卡）
+      // draw 告诉前端点这个会不会弹精灵结果卡（表里现在两个动作都抽，所以都有卡）
       .map(([key, spec]) => ({ key, label: spec.label, draw: spec.draw }))
   };
 }
@@ -63,7 +63,7 @@ async function buildState(store, userId) {
     return (parseInt(a.created_at) || 0) - (parseInt(b.created_at) || 0);
   });
 
-  // 已完成 / 已放弃：按划掉的时间倒序（最近划的在最前）。
+  // 已完成（含老数据里的「已放弃」）：按划掉的时间倒序（最近划的在最前）。
   // 索引里全留着，只往前 30 条读详情，但总数报全量
   const finishedIds = await store.zrevrange(doneIndexKey(userId), 0, -1);
   const finished = [];
@@ -214,9 +214,11 @@ router.delete('/tasks/:taskId', async (req, res) => {
   }
 });
 
-// 开始 / 完成 / 放弃 —— 一条待办的三个动作（状态机见 services/starlight.js 的
-// TASK_ACTIONS 和 docs 9.2）。**三段共用这一个处理函数**，差别只在 action 字符串：
-// 三份抄开的话，「开始」和「完成」都会抽卡，早晚有一处忘了刷新状态或者忘了兜错。
+// 开始 / 完成 —— 一条待办的两个动作（状态机见 services/starlight.js 的
+// TASK_ACTIONS 和 docs 9.2）。**两段共用这一个处理函数**，差别只在 action 字符串：
+// 两份抄开的话，「开始」和「完成」都会抽卡，早晚有一处忘了刷新状态或者忘了兜错。
+//
+// 「删除」不在这儿 —— 它不推进状态，走的是下面的 DELETE。
 function taskAction(action) {
   return async (req, res) => {
     try {
@@ -244,7 +246,7 @@ function taskAction(action) {
           action: result.action,
           status: result.status,
           taskName: result.taskName,
-          // 「放弃」不抽卡，spirit 是 null；前端据此决定弹不弹结果卡
+          // 「完成」但今天抽完了的时候是 null；前端据此决定弹不弹结果卡
           spirit: result.spirit,
           // 这次进账的洛克贝（spirit.roco 里也是同一个数，这里单独给一份，
           // 省得前端为结果卡再挖一层）。**不返回星光值** —— 页面不显示它
@@ -267,7 +269,8 @@ function taskAction(action) {
 
 router.post('/tasks/:taskId/start', taskAction('start'));
 router.post('/tasks/:taskId/complete', taskAction('complete'));
-router.post('/tasks/:taskId/abandon', taskAction('abandon'));
+// 原来这里还有 POST /tasks/:taskId/abandon（「放弃」），2026-09-23 去掉了：
+// 待办上那个出口改成了真删，走上面的 DELETE /tasks/:taskId，见 docs 9.6。
 
 // 原来这里还有个 POST /collect（手动把「待入库」的许愿星收进总数）。
 // 现在凝结出来就直接进总数了，整条路径和它的前端按钮一起去掉了。
