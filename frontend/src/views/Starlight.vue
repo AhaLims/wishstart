@@ -1,7 +1,14 @@
 <template>
   <div class="starlight-page">
-    <h1 class="page-title">星光值</h1>
-    <p class="page-subtitle">星光值可凝结成许愿星，抽卡同时获得洛克贝</p>
+    <!-- 页名 2026-09-23 从「星光值」改掉的。原来那个名字指的是**页面上的星光值
+         数字**，而它是个内部计价单位、界面上根本不显示（见下面那段注释）——
+         等于用一个看不见的东西给整页命名，还说不出这页在干嘛。
+         现在这页是「待办 + 抽精灵 + 攒洛克贝 + 填收集册」，是个玩法而不是一份
+         清单，所以页名按玩法的名字来，副标题负责把玩法一句话说清。
+         **导航那格同名**（App.vue）—— 两边一个名字，点进来对得上号。
+         **路由路径 /starlight 和代码里的 starlight 全都没动**，改的只是给人看的字。 -->
+    <h1 class="page-title">游戏人生</h1>
+    <p class="page-subtitle">做完一条抽一只精灵，抽到的洛克贝能下锅</p>
 
     <!-- 两个数分两张卡：许愿星（攒够星光值凝结出来的）和洛克贝（抽卡直接进账的）。
          它们各记各的账，并排放是为了好对账，不是一回事 —— 颜色也分开，
@@ -79,10 +86,16 @@
             <div class="dish-emoji">{{ item.emoji }}</div>
             <div class="dish-name">{{ item.name }}</div>
 
+            <!-- 「买得起吗」看的**必须是 state.rocoBalance**（上面那张可花余额卡
+                 里的同一个数），不能看 collections.rocoBalance。
+                 以前这里看的是后者，那是个只在「进页面」和「买完一样」时才会刷新的
+                 副本 —— 抽卡挣的钱更新的是 state 那份，这个副本不知道，于是钱够了
+                 按钮还是灰的，非得刷新页面才买得了（2026-09-23 修）。
+                 余额在页面上只有一份，别在这儿再存一份。 -->
             <button
               v-if="!isOwned(book, item)"
               class="dish-buy"
-              :disabled="!!buyingId || collections.rocoBalance < item.price"
+              :disabled="!!buyingId || state.rocoBalance < item.price"
               :title="`花 ${item.price} 洛克贝把「${item.name}」${book.action}`"
               @click="buyDish(book, item)"
             >
@@ -277,7 +290,9 @@
 
     <div v-else class="card empty-state sprite-empty">
       <div class="empty-state-icon">🔍</div>
-      <p v-if="state.poolTotal > 0">今天还没抽到精灵，完成一次星光值任务试试</p>
+      <!-- 「待办」不是「星光值任务」：这页上已经没有叫星光值的东西了（页头叫
+           游戏人生），拿内部计价单位招呼用户去干活，人家不知道那是什么（2026-09-23） -->
+      <p v-if="state.poolTotal > 0">今天还没抽到精灵，完成一次待办试试</p>
       <p v-else>没有读到精灵数据，检查一下数据目录里有没有 data/entities.json</p>
     </div>
 
@@ -330,9 +345,12 @@
           ></textarea>
         </div>
 
+        <!-- 「攒够档位」把主语省掉了：原来那句是「攒的**星光值**够档位」，而星光值
+             是页面不显示的内部单位，写出来只会多一个不知道指什么的名词。
+             省掉主语读起来一样清楚 —— 攒的就是上一句刚说的那个数（2026-09-23） -->
         <p class="form-hint">
           完成一次就从今天的精灵池里随机抽一只还没抽到过的精灵。
-          这只精灵值多少洛克贝就加多少，攒的星光值够档位还会自动凝结成许愿星。
+          这只精灵值多少洛克贝就加多少，攒够档位还会自动凝结成许愿星。
         </p>
 
         <p v-if="formError" class="form-error">{{ formError }}</p>
@@ -466,7 +484,12 @@ const hiddenFinished = computed(() => (
 
 // 收集册（洛克贝的消费去向）。形状整体从后端来，前端一条自己的规则都不加 ——
 // 「有哪些本、每本几格、每格多少钱」全在后端的数据文件里（docs 8.9）
-const collections = ref({ rocoBalance: 0, rocoTotal: 0, books: [] })
+//
+// **这里只放「本子」，不放余额。** 后端的响应里确实也带 rocoBalance / rocoTotal，
+// 但那是给别的调用方用的，这页**一律不看** —— 余额看 state.rocoBalance 那一份。
+// 曾经在这儿留过一份，结果抽卡挣的钱只更新 state、这份副本不动，钱够了按钮还是灰的
+// （2026-09-23 修）。别因为「反正响应里带了」就再存回来。
+const collections = ref({ books: [] })
 // 正在买的那一格（空串 = 没有请求在飞）
 const buyingId = ref('')
 // 刚下锅的那一格：给它加个 class 播「掉进锅里」那一下，播完摘掉。

@@ -7,7 +7,10 @@
         <router-link to="/tasks">任务</router-link>
         <router-link to="/records">记录</router-link>
         <router-link to="/wishes">愿望</router-link>
-        <router-link to="/starlight">星光值</router-link>
+        <!-- 导航名 2026-09-23 跟着页头改的。**路由路径还是 /starlight、内部名字也还是
+             starlight**，动的只是这一格给人看的字 —— 那一页已经是个玩法了（页头叫
+             「游戏人生」），导航挂着个内部计价单位的名，点进去还对不上号 -->
+        <router-link to="/starlight">游戏人生</router-link>
         <router-link to="/stats">统计 &amp; 同步</router-link>
       </div>
     </nav>
