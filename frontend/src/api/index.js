@@ -90,6 +90,12 @@ export const starlightApi = {
   // 现在凝结出来就直接进总数了，这条路径和后端那个接口一起去掉了
 }
 
+// 收集册 API（洛克贝唯一的消费去向，页面在星光值页里）
+export const collectionApi = {
+  getState: (userId) => api.get(`/collections?userId=${userId}`),
+  buy: (bookId, data) => api.post(`/collections/${bookId}/buy`, data)
+}
+
 // 同步 API
 export const syncApi = {
   exportSnapshot: () => api.get('/sync/export'),

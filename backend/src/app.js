@@ -10,6 +10,7 @@ const wishRoutes = require('./routes/wishes');
 const drawRoutes = require('./routes/draws');
 const statsRoutes = require('./routes/stats');
 const starlightRoutes = require('./routes/starlight');
+const collectionRoutes = require('./routes/collections');
 const syncRoutes = require('./routes/sync');
 const { setUploadsDir, getUploadsDir } = require('./services/wishImage');
 const { SPIRITS_URL_PREFIX, getImagesDir } = require('./services/spirits');
@@ -49,6 +50,7 @@ function createApp({ store, serveStatic, staticDir, uploadsDir }) {
   app.use('/api/v1/draws', drawRoutes);
   app.use('/api/v1/stats', statsRoutes);
   app.use('/api/v1/starlight', starlightRoutes);
+  app.use('/api/v1/collections', collectionRoutes);
   app.use('/api/v1/sync', syncRoutes);
 
   // 健康检查

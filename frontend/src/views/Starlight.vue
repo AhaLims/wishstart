@@ -31,7 +31,78 @@
         <div class="overview-today">
           今天获得 <b class="number today-roco">+{{ state.rocoToday }}</b>
         </div>
+        <!-- 可花余额：下面那口锅扣的就是这个数。
+             **跟上面的「总数」并排是有意的** —— 上面那个是「累计获得」，只涨不跌，
+             那是攒钱唯一的爽点；一消费就往回走的只能是余额，所以两个数必须分开
+             显示，不能拿总数去减（见 docs 8.1）。 -->
+        <div class="overview-balance">
+          可花余额 <b class="number">{{ state.rocoBalance }}</b>
+        </div>
       </div>
+    </div>
+
+    <!-- 收集册：洛克贝**唯一**的消费去向。
+         **放在洛克贝卡片正下方是刻意的** —— 挣钱的卡片和花钱的地方在同一屏，
+         抽完卡顺手就能买，这是不把它单开一页的全部理由（docs 8.5）。
+
+         结构是数据驱动的：一本 = 后端一个数据文件，锅、格子、价格、文案全从那来。
+         **这里不许出现写死的「火锅」「肥牛」「18」**，加第二本不用动这个组件（docs 8.9）。 -->
+    <div v-for="book in collections.books" :key="book.id" class="card collection-card">
+      <div class="collection-head">
+        <h2 class="section-title">{{ book.name }}</h2>
+        <span class="collection-progress">
+          已{{ book.action }} <b class="number">{{ book.ownedCount }}</b>
+          / {{ book.totalCount }}
+        </span>
+      </div>
+
+      <!-- 锅。**汤一直在冒泡**（纯 CSS，不是点击才动）—— 这页因此是「活着」的，
+           每次打开都在动。这条比下面那下解锁动画更影响体感，别做成一张静止的图。
+           集齐之后整锅发光（.pot-done），永久保留，不再能买（docs 8.4）。 -->
+      <div class="pot" :class="{ 'pot-done': book.doneAt }">
+        <div class="pot-bubbles" aria-hidden="true">
+          <span v-for="n in 8" :key="n" class="bubble" :style="{ '--i': n }"></span>
+        </div>
+
+        <div class="pot-grid">
+          <div
+            v-for="item in book.items"
+            :key="item.id"
+            class="dish"
+            :class="{
+              'dish-owned': isOwned(book, item),
+              'dish-dropping': droppingId === item.id
+            }"
+          >
+            <!-- 空格子上的剪影就是**同一个 emoji 压黑**，不另做一套图（docs 8.5）。
+                 emoji 本身是彩色的，filter 一压就只剩轮廓，正好当「还没买」的形状 -->
+            <div class="dish-emoji">{{ item.emoji }}</div>
+            <div class="dish-name">{{ item.name }}</div>
+
+            <button
+              v-if="!isOwned(book, item)"
+              class="dish-buy"
+              :disabled="!!buyingId || collections.rocoBalance < item.price"
+              :title="`花 ${item.price} 洛克贝把「${item.name}」${book.action}`"
+              @click="buyDish(book, item)"
+            >
+              <template v-if="buyingId === item.id">…</template>
+              <template v-else>
+                <img class="roco-ico" :src="rocoIcon" alt="" />{{ item.price }}
+              </template>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 集齐那一刻：顶上出现完成文案 + 日期。**日期从后端的集齐时间戳来**，
+           不是拿「格子数够了」现场推 —— 那样推不出是哪天完成的（docs 8.2） -->
+      <p v-if="book.doneAt" class="pot-done-note">
+        🎉 {{ book.doneTitle }} —— {{ book.doneNote }}（{{ formatTime(book.doneAt) }}）
+      </p>
+      <p v-else class="pot-note">
+        洛克贝是抽精灵进账的，攒够了就往锅里下一样。
+      </p>
     </div>
 
     <!-- 星光值任务：整页唯一要动手的地方，放在总览数字下面 -->
@@ -168,7 +239,8 @@
     </div>
 
     <p class="footnote">
-      洛克贝和凝结出来的许愿星跟任务、抽卡那套星星分开记账，暂时还不能兑换东西。
+      洛克贝和凝结出来的许愿星跟任务、抽卡那套星星分开记账 ——
+      洛克贝能拿去下锅，凝结出来的许愿星暂时还不能兑换东西。
     </p>
 
     <!-- 新建 / 编辑弹框 -->
@@ -249,7 +321,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useUserStore } from '../stores/user'
-import { starlightApi } from '../api'
+import { starlightApi, collectionApi } from '../api'
 import Toast from '../components/Toast.vue'
 // wiki 上标「异色外观」的那个小图标（57×56）。
 // 详情页立绘切换那一排 tab 里就有它，193 只异色共用同一张 —— 所以它才是
@@ -271,6 +343,9 @@ const emptyState = {
   todayEarned: 0,
   rocoToday: 0,
   rocoTotal: 0,
+  // 可花余额。**跟 rocoTotal 是两个数**：总数是累计获得、只涨不跌，
+  // 余额才是被那口锅扣的那个（docs 8.1）。别把它们当成一个
+  rocoBalance: 0,
   maxDailyStars: 25,
   nextCost: null,
   tasks: [],
@@ -287,6 +362,18 @@ let noticeTimer = null
 
 // 正在抽精灵的任务 id（空串 = 没有请求在飞），用来在请求期间禁用「完成」按钮
 const completingId = ref('')
+
+// 收集册（洛克贝的消费去向）。形状整体从后端来，前端一条自己的规则都不加 ——
+// 「有哪些本、每本几格、每格多少钱」全在后端的数据文件里（docs 8.9）
+const collections = ref({ rocoBalance: 0, rocoTotal: 0, books: [] })
+// 正在买的那一格（空串 = 没有请求在飞）
+const buyingId = ref('')
+// 刚下锅的那一格：给它加个 class 播「掉进锅里」那一下，播完摘掉。
+// 不摘的话下次再买别的东西它不会重播 —— CSS 动画只在 class 变化时触发一次
+const droppingId = ref('')
+let dropTimer = null
+
+const isOwned = (book, item) => book.owned.includes(item.id)
 
 // 头像加载失败（图还没拷全）就换成占位符，不显示破图。
 // 按 id 记，不能按编号 —— 同一个编号下有好几只，其中一只缺图不该把另一只也变成占位符。
@@ -380,6 +467,17 @@ const fetchState = async () => {
     }
   } catch (error) {
     console.error('Fetch starlight state error:', error)
+  }
+}
+
+const fetchCollections = async () => {
+  try {
+    const res = await collectionApi.getState(userStore.userId)
+    if (res.code === 0) {
+      collections.value = res.data
+    }
+  } catch (error) {
+    console.error('Fetch collections error:', error)
   }
 }
 
@@ -499,6 +597,47 @@ const showSpiritNotice = (data) => {
   })
 }
 
+// 往锅里下一样东西。
+//
+// 买不成（洛克贝不够 / 已经买过）**不是错误，就是没买成**，走同一条浮窗提示，
+// 不弹 alert 打断 —— 跟「今天的精灵都抽完了」一个处理方式。
+const buyDish = async (book, item) => {
+  if (buyingId.value) return
+  buyingId.value = item.id
+
+  try {
+    const res = await collectionApi.buy(book.id, {
+      userId: userStore.userId,
+      itemId: item.id
+    })
+
+    if (res.code === 0) {
+      // 响应里带的是**整份最新进度**（前端直接整体换掉，不用自己拼），
+      // 但流水不在里面，所以还要拉一次 state —— 不然买完流水还是旧的
+      collections.value = res.data
+      await fetchState()
+
+      droppingId.value = item.id
+      clearTimeout(dropTimer)
+      dropTimer = setTimeout(() => { droppingId.value = '' }, 1200)
+
+      const fresh = res.data.books.find((b) => b.id === book.id)
+      showNotice({
+        title: `${book.action}「${item.name}」`,
+        text: res.data.justDone
+          ? `-${res.data.bought.price} 洛克贝 · ${book.doneTitle} 🎉`
+          : `-${res.data.bought.price} 洛克贝 · 还差 ${fresh.totalCount - fresh.ownedCount} 样`
+      })
+    } else {
+      showNotice({ text: res.message || '买不了' }, 'error')
+    }
+  } catch (error) {
+    showNotice({ text: '买不了' }, 'error')
+  } finally {
+    buyingId.value = ''
+  }
+}
+
 const formatTime = (timestamp) => {
   return new Date(timestamp).toLocaleString('zh-CN', {
     month: 'numeric',
@@ -508,11 +647,15 @@ const formatTime = (timestamp) => {
   })
 }
 
-onMounted(fetchState)
+onMounted(() => {
+  fetchState()
+  fetchCollections()
+})
 
-// 切换页面时那个定时器还挂在那儿，会把已经卸掉的组件里的 ref 再改一次
+// 切换页面时那两个定时器还挂在那儿，会把已经卸掉的组件里的 ref 再改一次
 onUnmounted(() => {
   clearTimeout(noticeTimer)
+  clearTimeout(dropTimer)
 })
 </script>
 
@@ -579,6 +722,20 @@ onUnmounted(() => {
 }
 
 .overview-today b.today-roco {
+  color: #FFD700;
+}
+
+/* 「可花余额」那一行。跟上面两行用一条虚线隔开 —— 上面是「攒了多少」，
+   这一行是「还能花多少」，是两件事，不隔开容易被当成同一笔账的另一种说法 */
+.overview-balance {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(255, 215, 0, 0.25);
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.overview-balance b {
   color: #FFD700;
 }
 
@@ -1038,6 +1195,213 @@ onUnmounted(() => {
   text-align: center;
 }
 
+/* ---------- 收集册（洛克贝的消费去向）---------- */
+
+.collection-card {
+  margin-bottom: 1.5rem;
+}
+
+.collection-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+/* 标题自带的 margin 在这里由 .collection-head 统一管，去掉免得顶开一行 */
+.collection-head .section-title {
+  margin-bottom: 0;
+}
+
+.collection-progress {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+}
+
+.collection-progress b {
+  color: #FFD700;
+}
+
+/* 锅。**要看着像一口锅，不能是一块棕色面板上摆一排卡**（docs 8.5）。
+   三件事一起做才有锅感：顶上一条亮锅沿、上沿方锅底圆（border-radius 上小下大）、
+   汤色从中间往边上暗下去（radial 而不是 linear，linear 看着像一块布）。
+   overflow: hidden 是为了让冒上来的泡泡到顶就消失，不会飘到锅外面去 */
+.pot {
+  position: relative;
+  overflow: hidden;
+  /* 上面留出锅沿那一条的高度 */
+  padding: 2rem 1rem 1.5rem;
+  border-radius: 14px 14px 46px 46px;
+  background: radial-gradient(130% 100% at 50% 8%, #93502A 0%, #6B3D22 42%, #3A2113 100%);
+  border: 3px solid rgba(255, 200, 140, 0.4);
+  box-shadow: inset 0 10px 26px rgba(0, 0, 0, 0.5);
+  transition: box-shadow 0.6s ease, border-color 0.6s ease;
+}
+
+/* 锅沿：顶上那一条金属亮带。没有它整块就是个圆角矩形 */
+.pot::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 18px;
+  background: linear-gradient(180deg, #E0Ac72 0%, #A9713F 55%, rgba(120, 70, 35, 0) 100%);
+  border-bottom: 1px solid rgba(255, 225, 185, 0.4);
+  pointer-events: none;
+}
+
+/* 集齐之后整锅发光，永久保留（docs 8.4）。发光是**常驻的**，
+   不是播一次就停 —— 它是「这一锅齐了」的状态，不是一次性的庆祝 */
+.pot-done {
+  border-color: rgba(255, 215, 0, 0.75);
+  animation: potGlow 2.4s ease-in-out infinite;
+}
+
+@keyframes potGlow {
+  0%, 100% { box-shadow: inset 0 10px 26px rgba(0, 0, 0, 0.5), 0 0 14px rgba(255, 215, 0, 0.4); }
+  50%      { box-shadow: inset 0 10px 26px rgba(0, 0, 0, 0.5), 0 0 30px rgba(255, 215, 0, 0.75); }
+}
+
+/* 冒泡那层。**pointer-events: none** —— 它盖在格子上，不关掉的话
+   「买」按钮就点不着了 */
+.pot-bubbles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.bubble {
+  position: absolute;
+  bottom: -14px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255, 240, 215, 0.4);
+  border: 1px solid rgba(255, 240, 215, 0.55);
+  /* 8 个泡泡靠 --i 错开位置和节奏，看着才是「一直在冒」而不是整齐地一起动 */
+  left: calc(4% + var(--i) * 11.8%);
+  animation: bubbleUp 3.4s ease-in infinite;
+  animation-delay: calc(var(--i) * -0.46s);
+}
+
+@keyframes bubbleUp {
+  0%   { transform: translateY(0) scale(0.5); opacity: 0; }
+  15%  { opacity: 1; }
+  100% { transform: translateY(-210px) scale(1.2); opacity: 0; }
+}
+
+/* 格子。**18 格全在这儿，没买的也在** —— 空格子看得见才有集齐的冲动，
+   这是「收集册」跟「商店」的区别（docs 8.5）。
+
+   背景特意很淡：深色块一铺满，格子就变成「一排卡片」，汤和泡泡全被挡住，
+   锅感立刻没了。留一点暗底是为了让没买的剪影在棕色汤上还能看清 */
+.pot-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.6rem;
+}
+
+.dish {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.5rem 0.25rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.14);
+  transition: background 0.35s ease;
+}
+
+.dish-emoji {
+  font-size: 1.8rem;
+  line-height: 1.2;
+  /* 没买的是**同一个 emoji 压黑**，不另做一套剪影图（docs 8.5）。
+     压成 0.3 透明度让它看着像「浮在汤里的暗影」而不是一坨纯黑 */
+  filter: brightness(0) opacity(0.38);
+  transition: filter 0.35s ease;
+}
+
+.dish-owned {
+  background: rgba(255, 215, 0, 0.1);
+}
+
+.dish-owned .dish-emoji {
+  filter: none;
+}
+
+.dish-name {
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.dish-owned .dish-name {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* 「买」按钮。价格直接写在按钮上 —— 点之前就得知道要花多少。
+   洛克贝不够时禁用（不是点击后再报错），禁用态由全局 .btn:disabled 的
+   opacity 处理，这里只补一个 cursor */
+.dish-buy {
+  margin-top: 0.15rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid rgba(255, 215, 0, 0.4);
+  border-radius: 8px;
+  background: rgba(255, 215, 0, 0.12);
+  color: #FFD700;
+  font-family: 'Poppins', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.dish-buy:hover:not(:disabled) {
+  background: rgba(255, 215, 0, 0.26);
+}
+
+.dish-buy:disabled {
+  cursor: not-allowed;
+}
+
+.dish-buy .roco-ico {
+  width: 0.9em;
+  height: 0.9em;
+  margin-right: 0.1rem;
+}
+
+/* 下锅那一下：**从上方掉下来、回弹一下**。这是整个功能的核心体验（docs 8.5）。
+   用 animation 不用 transition —— 它只播一次，播完就停在正常位置，
+   靠 JS 到点摘 class 收尾 */
+.dish-dropping {
+  animation: dishDrop 1.1s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes dishDrop {
+  0%   { transform: translateY(-120px) scale(1.5) rotate(-12deg); opacity: 0; }
+  55%  { transform: translateY(0) scale(1) rotate(0deg); opacity: 1; }
+  70%  { transform: translateY(4px) scale(0.94); }
+  85%  { transform: translateY(-3px) scale(1.04); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+.pot-note {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.35);
+  text-align: center;
+}
+
+.pot-done-note {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: #FFD700;
+  text-align: center;
+}
+
 @media (max-width: 768px) {
   .overview {
     grid-template-columns: 1fr;
@@ -1046,6 +1410,11 @@ onUnmounted(() => {
   .task-card {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  /* 6 列在窄屏上每格不到 50px，emoji 和价格会挤成一团，退到 3 列 */
+  .pot-grid {
+    grid-template-columns: repeat(3, 1fr);
   }
 }
 </style>

@@ -98,6 +98,17 @@ async function ensureStarlight(store, userId, now = new Date()) {
   let rocoTotal = parseInt(raw.roco_total) || 0;
   let rocoToday = parseInt(raw.roco_today) || 0;
 
+  // 可花余额（收集册要花的就是这个）。roco_total 是**累计获得**、只涨不跌，
+  // 不能直接拿去减 —— 一减数字往回走，攒了这么久的成就感就没了，所以拆成两个数。
+  //
+  // 老数据没有这个字段，补成累计值，等于「以前挣的全都能花」—— 不做
+  // 「从今天开始算」，那等于把已有的洛克贝没收了。
+  //
+  // **判据必须是「字段不存在」，不能写成 `parseInt(...) || 0`**：余额真的花到
+  // 0 之后再进来，`raw.roco_balance` 是 '0' 而不是 undefined，写成 `|| 0`
+  // 就会把它当成老数据重新补成 rocoTotal，等于白送一笔。
+  let rocoBalance = raw.roco_balance === undefined ? rocoTotal : (parseInt(raw.roco_balance) || 0);
+
   // 老数据迁移：以前凝结出来的星星先躺在 pending 里，要玩家点一下「入库」才算数。
   // 现在改成自动进总数了，所以把还躺在天上的那些一次性并进 banked。
   // 用户的决定是「许愿星全留」，改规则不能让已经凝出来的星星凭空消失。
@@ -156,6 +167,9 @@ async function ensureStarlight(store, userId, now = new Date()) {
     today_earned: String(todayEarned),
     roco_total: String(rocoTotal),
     roco_today: String(rocoToday),
+    // **这一行不能省**：上面那次「老数据补成 roco_total」的迁移是靠这个 diff
+    // 落盘的，字段漏在 next 外面永远写不回去，每次进来都重新补一遍
+    roco_balance: String(rocoBalance),
     value_date: valueDate,
     roco_date: rocoDate,
     condense_date: condenseDate
@@ -180,9 +194,11 @@ async function ensureStarlight(store, userId, now = new Date()) {
     // 当天凝结出来的许愿星（就是档位计数，每天重置）
     todayCondensed,
     todayEarned,
-    // 洛克贝：当天 / 总共
+    // 洛克贝：当天 / 总共 / 可花
     rocoTotal,
     rocoToday,
+    // 可花余额。收集册扣的是它，卡片上「可花余额」那行显示的也是它
+    rocoBalance,
     maxDailyStars: MAX_DAILY_STARS,
     // 下一颗要多少星光值；今天已经凝满 25 颗时为 null
     nextCost: nextStarCost,
@@ -242,11 +258,15 @@ async function completeStarlightTask(store, task, now = new Date()) {
     await store.hincrby(stateKey(userId), 'value', earned);
     await store.hincrby(stateKey(userId), 'today_earned', earned);
 
-    // 洛克贝不参与阶梯，就是两个计数器。
+    // 洛克贝不参与阶梯，就是几个计数器。
     // 跨天清零由上面那次 ensureStarlight 负责（它在加数之前跑，顺带把
     // roco_date 刷成今天），所以这里直接加是安全的 —— 跟 value 同一个道理
     await store.hincrby(stateKey(userId), 'roco_total', rocoEarned);
     await store.hincrby(stateKey(userId), 'roco_today', rocoEarned);
+    // **可花余额也得跟着加**，这是唯一能花的那份钱。少了这一行，挣的洛克贝
+    // 只进「累计」不进「余额」，收集册就永远买不了东西 —— 而余额的初值来自
+    // 迁移，页面上看着还有钱，只是新挣的一分都花不出去，很难查
+    await store.hincrby(stateKey(userId), 'roco_balance', rocoEarned);
 
     // 记录里只存 id 和几个展示字段，详情（立绘、介绍、属性…）在读取时现查池子，
     // 见 spirits.js 的 enrichDraw()。这样图鉴更新之后详情跟着新，记录也不臃肿。
@@ -302,6 +322,27 @@ async function completeStarlightTask(store, task, now = new Date()) {
   });
 }
 
+// 花洛克贝（目前只有收集册在用）。
+//
+// **只减 roco_balance，roco_total 一动不动** —— roco_total 是「累计获得」，
+// 只涨不跌是它唯一的爽点，见上面那段和 docs 8.1。
+//
+// 余额不够时**不扣**，返回 { ok: false, balance }，调用方拿 balance 去算「还差多少」。
+//
+// 这里不做并发保护（读余额和扣余额中间被人插一脚会超支）：调用方必须自己在锁里
+// 跑完整段。收集册那条路是在 withLock 里调的，见 services/collections.js。
+async function spendRoco(store, userId, amount) {
+  const key = stateKey(userId);
+  const balance = parseInt(await store.hget(key, 'roco_balance')) || 0;
+
+  // 价格来自数据文件，理论上不会是脏的，但这里是唯一动钱的地方，拦一道不亏
+  if (!Number.isInteger(amount) || amount <= 0) return { ok: false, balance };
+  if (balance < amount) return { ok: false, balance };
+
+  const after = await store.hincrby(key, 'roco_balance', -amount);
+  return { ok: true, balance: after };
+}
+
 module.exports = {
   STAR_COSTS,
   MAX_DAILY_STARS,
@@ -314,5 +355,6 @@ module.exports = {
   addLog,
   loadDraws,
   ensureStarlight,
-  completeStarlightTask
+  completeStarlightTask,
+  spendRoco
 };
