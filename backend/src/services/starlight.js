@@ -47,9 +47,50 @@ const STAR_COSTS = [
 // 一天最多凝结 25 颗
 const MAX_DAILY_STARS = STAR_COSTS.length;
 
+// 待办的状态机：todo → doing → done，todo / doing 都能 abandoned（见 docs 9.2）。
+// **状态只加在任务 hash 自己的字段里，不新增 key 类型**（sync 导出只认
+// hash / set / zset / list，开一个 string 类型的 key 会在快照里静默消失）。
+const TASK_TODO = 'todo';
+const TASK_DOING = 'doing';
+const TASK_DONE = 'done';
+const TASK_ABANDONED = 'abandoned';
+
+const TASK_STATUS_LABEL = {
+  [TASK_TODO]: '待办',
+  [TASK_DOING]: '进行中',
+  [TASK_DONE]: '已完成',
+  [TASK_ABANDONED]: '已放弃'
+};
+
+// 一条待办允许的动作表。**这是「什么状态能点什么」的唯一判据** ——
+// 路由和前端提示都从这儿推，别在别处再写一遍 if (status === 'doing')，
+// 两处早晚会走偏。
+const TASK_ACTIONS = {
+  start: {
+    from: [TASK_TODO], to: TASK_DOING, draw: true, label: '开始'
+  },
+  complete: {
+    from: [TASK_DOING], to: TASK_DONE, draw: true, label: '完成'
+  },
+  abandon: {
+    from: [TASK_TODO, TASK_DOING], to: TASK_ABANDONED, draw: false, label: '放弃'
+  }
+};
+
+// 老任务 hash 里没有 status 字段，一律当待办 —— **不做迁移**，它们原地变成
+// 待办区的初始内容，complete_count 保留做历史（老数据里那个 16 是「以前能
+// 反复完成」的痕迹，见 docs 9.7）。
+function taskStatus(task) {
+  return task.status || TASK_TODO;
+}
+
 const stateKey = (userId) => `wishstar:starlight:${userId}`;
 const taskKey = (taskId) => `wishstar:starlight_task:${taskId}`;
 const taskIndexKey = (userId) => `wishstar:starlight_tasks:${userId}`;
+// 已结束的待办（done / abandoned），member 是 taskId、score 是结束时刻。
+// **跟待办索引分开**：任务现在只增不减，待办区每次全量读，攒半年之后没必要连
+// 几百条已完成的也捞出来；而且「什么时候划掉的」要排序，set 排不了，zset 白送。
+const doneIndexKey = (userId) => `wishstar:starlight_done:${userId}`;
 const logKey = (userId) => `wishstar:starlight_logs:${userId}`;
 
 // 当天抽到过的精灵（zset）。一张表两个用途：
@@ -210,115 +251,180 @@ async function ensureStarlight(store, userId, now = new Date()) {
   };
 }
 
-// 完成一次星光值任务：从当天还没抽到过的精灵里抽一只，把它的星光值加进来，
-// 然后跑一遍自动凝结。
+// 抽一只今天还没抽到过的精灵，两样一起进账（星光值喂阶梯、洛克贝直接累计）。
+//
+// **调用方必须已经在锁里**：整段是「读今天抽过的 → 抽一只没抽过的 → 写回去」，
+// 不锁的话两个并发请求会各自读到同一份「今天抽过」的列表，各抽走一只不同的精灵——
+// 不放回的保证就破了，一次动作白得两只。
 //
 // 抽不到精灵时返回 { error }，调用方原样把 message 给前端。
-async function completeStarlightTask(store, task, now = new Date()) {
+async function drawForTask(store, task, now) {
   const userId = task.user_id;
   const date = getBeijingDate(now);
 
-  // 「读今天抽过的 → 抽一只没抽过的 → 写回去」整段串行。
-  // 不锁的话两个并发请求会各自读到同一份「今天抽过」的列表，各抽走一只不同的精灵——
-  // 不放回的保证就破了，一次任务完成白得两只。前端会禁用按钮，但不能只靠前端。
+  // 不放回：把今天已经抽到过的**实体**排除掉，按 id 不按编号 ——
+  // 同一个编号下挂着本体 / 地区形态 / 首领化 / 异色，它们是各自独立的四只。
+  // 老记录里没有 id，resolveDrawEntity 会按编号还原成默认卡，语义正好对上。
+  const drawn = await loadDraws(store, userId, date);
+  const excludeIds = new Set();
+  for (const d of drawn) {
+    const e = resolveDrawEntity(d);
+    if (e) excludeIds.add(e.id);
+  }
+
+  const spirit = drawSpirit(excludeIds);
+  if (!spirit) {
+    // drawSpirit 在两种情况下都是 null：今天的抽完了，或者池子根本没读出来。
+    // 后者是数据目录配错了，得说清楚，不然会被当成「今天没得抽了」白等一天。
+    if (countTotal() === 0) {
+      return { error: '精灵池是空的，检查一下数据目录里有没有 data/entities.json' };
+    }
+    return { error: '今天的精灵都抽完了，明天再来吧' };
+  }
+
+  // 一次抽卡两样一起进账，各按各的规则算：
+  //   星光值：特殊形态翻倍，每多一个标签再翻一倍（×1/2/4/8）→ 喂下面的阶梯
+  //   洛克贝：异色 ×10、每个形态标签 ×2（×1/2/4/10/20/40）→ 直接累计
+  // spirit.star / spirit.roco 都是图鉴上的**基础值**，乘完才是真正进账的数 ——
+  // 进账、流水、记录里存的都是乘完的，只有图鉴上那个基础值留在池子里。
+  // 两套倍率都在 spirits.js 里，别在这边重算。
+  const earned = spirit.star * spirit.starMultiplier;
+  const rocoEarned = spirit.roco * spirit.rocoMultiplier;
+
+  await store.hincrby(stateKey(userId), 'value', earned);
+  await store.hincrby(stateKey(userId), 'today_earned', earned);
+
+  // 洛克贝不参与阶梯，就是几个计数器。
+  // 跨天清零由调用方进锁后那次 ensureStarlight 负责（它在加数之前跑，顺带把
+  // roco_date 刷成今天），所以这里直接加是安全的 —— 跟 value 同一个道理
+  await store.hincrby(stateKey(userId), 'roco_total', rocoEarned);
+  await store.hincrby(stateKey(userId), 'roco_today', rocoEarned);
+  // **可花余额也得跟着加**，这是唯一能花的那份钱。少了这一行，挣的洛克贝
+  // 只进「累计」不进「余额」，收集册就永远买不了东西 —— 而余额的初值来自
+  // 迁移，页面上看着还有钱，只是新挣的一分都花不出去，很难查
+  await store.hincrby(stateKey(userId), 'roco_balance', rocoEarned);
+
+  // 记录里只存 id 和几个展示字段，详情（立绘、介绍、属性…）在读取时现查池子，
+  // 见 spirits.js 的 enrichDraw()。这样图鉴更新之后详情跟着新，记录也不臃肿。
+  const draw = {
+    id: spirit.id,
+    number: spirit.number,
+    name: spirit.name,
+    // 这次抽到给了多少星光值。**页面上已经不显示了**（星光值彻底不显示），
+    // 但还是照存：记录是历史，删掉的字段以后想要也补不回来，而且它就是
+    // 当时凝结出那颗许愿星的凭据
+    star: earned,
+    starMultiplier: spirit.starMultiplier,
+    // 这次抽到给了多少洛克贝（已经乘过加成）—— 页面上显示的就是这个数
+    roco: rocoEarned,
+    // 洛克贝翻了几倍（1/2/4/10/20/40）。**必须跟 starMultiplier 分开存**：
+    // 两套规则不一样，而且以后还会各改各的。前端要用它把进账除回去算图鉴
+    // 基础值，拿池子现在的规则去算老记录会算错。
+    // 详见 spirits.js 的 rocoMultiplierOfRecord()
+    rocoMultiplier: spirit.rocoMultiplier,
+    headUrl: spirit.headUrl,
+    at: now.getTime()
+  };
+  await store.zadd(drawsKey(userId, date), draw.at, JSON.stringify(draw));
+
+  // 流水整份是**洛克贝**的（用户要求：记录里只留洛克贝，不出现星光值和
+  // 许愿星的流水）。旧的星光值/许愿星流水躺在存储里不动，页面按 unit 过滤掉
+  await addLog(store, userId, {
+    type: 'income',
+    category: 'starlight_task',
+    amount: rocoEarned,
+    unit: '洛克贝',
+    description: `抽到「${spirit.name}」获得 ${rocoEarned} 洛克贝` +
+      // 翻倍了就得说一声：流水上的数字比图鉴上大，不解释看着像算错。
+      // 用 formLabel 把**是哪几个标签**写出来（「首领化 · 异色 ×20」），
+      // 笼统写「异色/特殊形态」看不出 20 倍是怎么来的
+      (spirit.rocoMultiplier > 1 ? `（${spirit.formLabel} ×${spirit.rocoMultiplier}）` : '')
+  });
+
+  // 返回补全过的形状，跟「今日抽到的精灵」里那些保持一致 ——
+  // 两处形状不一样的话，前端为结果卡和卡片写两套字段很容易漏。
+  // earned 是星光值，只留给调用方做日志/调试，页面上不显示
+  return { spirit: enrichDraw(draw), earned, rocoEarned };
+}
+
+// 推进一条待办：开始 / 完成 / 放弃（见 docs 9）。
+//
+// **三个动作走同一个函数**，是因为它们要抢同一把锁 —— 抽卡本身必须串行
+// （见 drawForTask），而状态转移也得跟抽卡在同一段临界区里：分开写三个函数，
+// 「开始」连点两下就会各自读到旧的 status、各抽一只精灵，白送一只。
+//
+// 返回 { error } 时调用方原样把 message 给前端；成功时 state 是刷新过的全量状态。
+async function advanceTask(store, task, action, now = new Date()) {
+  const spec = TASK_ACTIONS[action];
+  if (!spec) return { error: '没有这个动作' };
+  const userId = task.user_id;
+
   return withLock(`starlight:${userId}`, async () => {
     // 先 ensure 一次，让跨天重置（如果有）在加数之前发生——
     // 否则刚加上的星光值会被紧接着的每日清零抹掉
     await ensureStarlight(store, userId, now);
 
-    // 不放回：把今天已经抽到过的**实体**排除掉，按 id 不按编号 ——
-    // 同一个编号下挂着本体 / 地区形态 / 首领化 / 异色，它们是各自独立的四只。
-    // 老记录里没有 id，resolveDrawEntity 会按编号还原成默认卡，语义正好对上。
-    const drawn = await loadDraws(store, userId, date);
-    const excludeIds = new Set();
-    for (const d of drawn) {
-      const e = resolveDrawEntity(d);
-      if (e) excludeIds.add(e.id);
-    }
-
-    const spirit = drawSpirit(excludeIds);
-    if (!spirit) {
-      // drawSpirit 在两种情况下都是 null：今天的抽完了，或者池子根本没读出来。
-      // 后者是数据目录配错了，得说清楚，不然会被当成「今天没得抽了」白等一天。
-      if (countTotal() === 0) {
-        return { error: '精灵池是空的，检查一下数据目录里有没有 data/entities.json' };
-      }
-      return { error: '今天的精灵都抽完了，明天再来吧' };
-    }
-
-    // 一次抽卡两样一起进账，各按各的规则算：
-    //   星光值：特殊形态翻倍，每多一个标签再翻一倍（×1/2/4/8）→ 喂下面的阶梯
-    //   洛克贝：异色 ×10、每个形态标签 ×2（×1/2/4/10/20/40）→ 直接累计
-    // spirit.star / spirit.roco 都是图鉴上的**基础值**，乘完才是真正进账的数 ——
-    // 进账、流水、记录里存的都是乘完的，只有图鉴上那个基础值留在池子里。
-    // 两套倍率都在 spirits.js 里，别在这边重算。
-    const earned = spirit.star * spirit.starMultiplier;
-    const rocoEarned = spirit.roco * spirit.rocoMultiplier;
-
-    await store.hincrby(stateKey(userId), 'value', earned);
-    await store.hincrby(stateKey(userId), 'today_earned', earned);
-
-    // 洛克贝不参与阶梯，就是几个计数器。
-    // 跨天清零由上面那次 ensureStarlight 负责（它在加数之前跑，顺带把
-    // roco_date 刷成今天），所以这里直接加是安全的 —— 跟 value 同一个道理
-    await store.hincrby(stateKey(userId), 'roco_total', rocoEarned);
-    await store.hincrby(stateKey(userId), 'roco_today', rocoEarned);
-    // **可花余额也得跟着加**，这是唯一能花的那份钱。少了这一行，挣的洛克贝
-    // 只进「累计」不进「余额」，收集册就永远买不了东西 —— 而余额的初值来自
-    // 迁移，页面上看着还有钱，只是新挣的一分都花不出去，很难查
-    await store.hincrby(stateKey(userId), 'roco_balance', rocoEarned);
-
-    // 记录里只存 id 和几个展示字段，详情（立绘、介绍、属性…）在读取时现查池子，
-    // 见 spirits.js 的 enrichDraw()。这样图鉴更新之后详情跟着新，记录也不臃肿。
-    const draw = {
-      id: spirit.id,
-      number: spirit.number,
-      name: spirit.name,
-      // 这次抽到给了多少星光值。**页面上已经不显示了**（星光值彻底不显示），
-      // 但还是照存：记录是历史，删掉的字段以后想要也补不回来，而且它就是
-      // 当时凝结出那颗许愿星的凭据
-      star: earned,
-      starMultiplier: spirit.starMultiplier,
-      // 这次抽到给了多少洛克贝（已经乘过加成）—— 页面上显示的就是这个数
-      roco: rocoEarned,
-      // 洛克贝翻了几倍（1/2/4/10/20/40）。**必须跟 starMultiplier 分开存**：
-      // 两套规则不一样，而且以后还会各改各的。前端要用它把进账除回去算图鉴
-      // 基础值，拿池子现在的规则去算老记录会算错。
-      // 详见 spirits.js 的 rocoMultiplierOfRecord()
-      rocoMultiplier: spirit.rocoMultiplier,
-      headUrl: spirit.headUrl,
-      at: now.getTime()
-    };
-    await store.zadd(drawsKey(userId, date), draw.at, JSON.stringify(draw));
-
-    // 完成次数在锁里重读一次：调用方手上那份是进锁之前读的，
-    // 两个并发请求会都从旧值 +1，最后一次写入把前一次盖掉
+    // 锁里重读任务：调用方手上那份是点之前读的，两个并发请求会各自从同一个
+    // 旧 status 出发，把同一个动作做两遍。（完成次数也顺带从这份新值推，
+    // 不再从调用方那份旧的 +1）
     const fresh = (await store.hgetall(taskKey(task.id))) || {};
-    const newComplete = (parseInt(fresh.complete_count) || 0) + 1;
-    await store.hset(taskKey(task.id), {
-      complete_count: String(newComplete),
-      updated_at: String(Date.now())
-    });
+    if (!fresh.id) return { error: '任务不存在' };
 
-    // 流水整份是**洛克贝**的（用户要求：记录里只留洛克贝，不出现星光值和
-    // 许愿星的流水）。旧的星光值/许愿星流水躺在存储里不动，页面按 unit 过滤掉
-    await addLog(store, userId, {
-      type: 'income',
-      category: 'starlight_task',
-      amount: rocoEarned,
-      unit: '洛克贝',
-      description: `抽到「${spirit.name}」获得 ${rocoEarned} 洛克贝` +
-        // 翻倍了就得说一声：流水上的数字比图鉴上大，不解释看着像算错。
-        // 用 formLabel 把**是哪几个标签**写出来（「首领化 · 异色 ×20」），
-        // 笼统写「异色/特殊形态」看不出 20 倍是怎么来的
-        (spirit.rocoMultiplier > 1 ? `（${spirit.formLabel} ×${spirit.rocoMultiplier}）` : '')
-    });
+    const status = taskStatus(fresh);
+    if (!spec.from.includes(status)) {
+      return { error: `「${fresh.name}」是${TASK_STATUS_LABEL[status]}，不能${spec.label}` };
+    }
+
+    let draw = null;
+    let noDraw = null;
+    if (spec.draw) {
+      const result = await drawForTask(store, fresh, now);
+      if (result.error) {
+        // 「开始」抽不出就整个拒绝，状态原地不动 —— 下面什么都还没写，是原子的。
+        // 「完成」抽不出照样往下走：**事已经做完了，不该被抽卡机制挡在门外**。
+        // 反过来做（完成也拦住）的话，池子抽干的那天会有一堆做完的任务卡在
+        // 「进行中」划不掉。见 docs 9.3
+        if (action === 'start') return { error: result.error };
+        noDraw = result.error;
+      } else {
+        draw = result;
+      }
+    }
+
+    const at = now.getTime();
+    const updates = { status: spec.to, updated_at: String(at) };
+    if (action === 'start') updates.started_at = String(at);
+    if (action === 'complete') {
+      updates.resolved_at = String(at);
+      // 保留原字段的含义：它是**累计完成次数**。新规则下一条待办只能完成一次，
+      // 所以新数据里它只能是 1；老数据里那个 16 是「以前能反复完成」的痕迹，不动它
+      updates.complete_count = String((parseInt(fresh.complete_count) || 0) + 1);
+    }
+    if (action === 'abandon') updates.resolved_at = String(at);
+
+    await store.hset(taskKey(fresh.id), updates);
+
+    // 进终态：从待办索引挪到已完成索引。**两把索引都要动** —— 只往新的里加、
+    // 不往旧的里删，待办区会继续列出这条已经划掉的（它 hgetall 出来是 done）
+    if (spec.to === TASK_DONE || spec.to === TASK_ABANDONED) {
+      await store.srem(taskIndexKey(userId), fresh.id);
+      await store.zadd(doneIndexKey(userId), at, fresh.id);
+    }
 
     const state = await ensureStarlight(store, userId, now);
-    // 返回补全过的形状，跟「今日抽到的精灵」里那些保持一致 ——
-    // 两处形状不一样的话，前端为结果卡和卡片写两套字段很容易漏。
-    // earned 是星光值，只留给调用方做日志/调试，页面上不显示
-    return { spirit: enrichDraw(draw), earned, rocoEarned, state, completeCount: newComplete };
+    return {
+      action,
+      status: spec.to,
+      taskName: fresh.name,
+      // 「开始」和「完成」都抽卡，都有一个结果卡；「放弃」不抽，这两个是 null
+      spirit: draw ? draw.spirit : null,
+      earned: draw ? draw.earned : 0,
+      rocoEarned: draw ? draw.rocoEarned : 0,
+      // 「完成」但没抽到卡时的原因（今天抽完了 / 池子是空的）。前端要把它说出来，
+      // 不然用户会以为自己白干了一条
+      noDraw,
+      state
+    };
   });
 }
 
@@ -346,15 +452,23 @@ async function spendRoco(store, userId, amount) {
 module.exports = {
   STAR_COSTS,
   MAX_DAILY_STARS,
+  TASK_TODO,
+  TASK_DOING,
+  TASK_DONE,
+  TASK_ABANDONED,
+  TASK_STATUS_LABEL,
+  TASK_ACTIONS,
   stateKey,
   taskKey,
   taskIndexKey,
+  doneIndexKey,
   logKey,
   drawsKey,
   costOfStar,
+  taskStatus,
   addLog,
   loadDraws,
   ensureStarlight,
-  completeStarlightTask,
+  advanceTask,
   spendRoco
 };

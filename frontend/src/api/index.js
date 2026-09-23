@@ -85,7 +85,11 @@ export const starlightApi = {
   createTask: (data) => api.post('/starlight/tasks', data),
   updateTask: (taskId, data) => api.put(`/starlight/tasks/${taskId}`, data),
   deleteTask: (taskId) => api.delete(`/starlight/tasks/${taskId}`),
-  completeTask: (taskId) => api.post(`/starlight/tasks/${taskId}/complete`)
+  // 一条待办的三个动作（docs 9.2）。**「开始」和「完成」都各抽一次精灵**，
+  // 「放弃」不抽 —— 所以三个都是 POST，只有前两个会返回 spirit
+  startTask: (taskId) => api.post(`/starlight/tasks/${taskId}/start`),
+  completeTask: (taskId) => api.post(`/starlight/tasks/${taskId}/complete`),
+  abandonTask: (taskId) => api.post(`/starlight/tasks/${taskId}/abandon`)
   // 原来还有个 collect（手动把待入库的许愿星收进总数），
   // 现在凝结出来就直接进总数了，这条路径和后端那个接口一起去掉了
 }

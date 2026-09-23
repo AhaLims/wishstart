@@ -75,8 +75,11 @@ class MemoryStore {
       list.splice(existingIndex, 1);
     }
     list.push({ score, member });
-    // 按分数排序
-    list.sort((a, b) => b.score - a.score);
+    // 按分数**升序**排 —— 跟 jsonStore 和 Redis 一致。
+    // 这里原先是降序，于是两个实现语义正好反过来：同样的 zrange，jsonStore 给
+    // 最旧的、memoryStore 给最新的。`zrevrange(logKey, 0, 49)` 本意是「最近 50 条」，
+    // 在内存模式下取到的是最老的 50 条。
+    list.sort((a, b) => a.score - b.score);
     return true;
   }
 
@@ -99,6 +102,17 @@ class MemoryStore {
     const list = this.data.get(key).slice().reverse();
     const end = stop === -1 ? list.length : stop + 1;
     return list.slice(start, end).map(item => item.member);
+  }
+
+  // jsonStore 有这个，memoryStore 一直漏着 —— 谁在内存模式下删 zset 成员都会
+  // 直接 TypeError。删任务要清「已完成」索引，正好补上
+  async zrem(key, member) {
+    if (!this.data.has(key)) return false;
+    const list = this.data.get(key);
+    const idx = list.findIndex(item => item.member === member);
+    if (idx === -1) return false;
+    list.splice(idx, 1);
+    return true;
   }
 
   // List 操作

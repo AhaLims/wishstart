@@ -105,38 +105,86 @@
       </p>
     </div>
 
-    <!-- 星光值任务：整页唯一要动手的地方，放在总览数字下面 -->
+    <!-- 待办事项区（docs 9）：整页唯一要动手的地方，放在总览数字下面。
+         跟改造前的「星光值任务」是同一块、同一个位置，改的是每条的生命周期 ——
+         **开始和完成各抽一次精灵**（奖励完成，也奖励开始），做完就划掉 -->
     <div class="section-head tasks-head">
-      <h2 class="section-title">星光值任务</h2>
-      <button class="btn btn-primary btn-sm" @click="openCreate">+ 新建任务</button>
+      <h2 class="section-title">今天要做的事</h2>
+      <button class="btn btn-primary btn-sm" @click="openCreate">+ 新建</button>
     </div>
 
     <div v-if="state.tasks.length" class="task-list">
-      <div v-for="task in state.tasks" :key="task.id" class="card task-card">
+      <div
+        v-for="task in state.tasks"
+        :key="task.id"
+        class="card task-card"
+        :class="{ 'task-doing': task.status === 'doing' }"
+      >
         <div class="task-main">
-          <div class="task-name">{{ task.name }}</div>
+          <!-- 状态标记是**兄弟节点**，不塞进 .task-name 里面 —— 塞进去的话
+               那元素的文本会变成「进行中写周报」，名字就跟状态粘在一起了 -->
+          <div class="task-title">
+            <span v-if="task.status === 'doing'" class="task-flag">进行中</span>
+            <span class="task-name">{{ task.name }}</span>
+          </div>
           <div class="task-meta">
-            完成一次抽一只精灵 ·
-            已完成 <b class="number">{{ task.complete_count }}</b> 次
+            <!-- 待办说清下一步点哪个；进行中的提醒它是要做完的，不能就这么撂着 -->
+            <template v-if="task.status === 'doing'">点「完成」划掉，这一步也抽一只精灵</template>
+            <template v-else>点「开始」就抽一只精灵</template>
+            <template v-if="Number(task.complete_count) > 0">
+              · 以前完成过 <b class="number">{{ task.complete_count }}</b> 次
+            </template>
           </div>
         </div>
         <div class="task-actions">
+          <!-- 按钮**照着后端给的 actions 渲染**，前端不自己判断 status ——
+               状态机只在 services/starlight.js 的 TASK_ACTIONS 里有一份，
+               这里再写一遍 if (status === 'doing') 就早晚会跟后端走偏。
+               这里只负责把动作 key 映射成按钮样式 -->
           <button
-            class="btn btn-success btn-sm"
-            :disabled="completingId === task.id"
-            @click="completeTask(task)"
+            v-for="act in task.actions"
+            :key="act.key"
+            class="btn btn-sm"
+            :class="actionClass(act.key)"
+            :disabled="actingId === task.id"
+            @click="runAction(task, act)"
           >
-            {{ completingId === task.id ? '抽取中...' : '完成' }}
+            {{ actingId === task.id ? '···' : act.label }}
           </button>
           <button class="btn btn-primary btn-sm" @click="openEdit(task)">编辑</button>
-          <button class="btn btn-danger btn-sm" @click="removeTask(task)">删除</button>
         </div>
       </div>
     </div>
 
     <div v-else class="card empty-state">
       <div class="empty-state-icon">✨</div>
-      <p>还没有星光值任务，新建一个开始攒许愿星和洛克贝吧</p>
+      <p>还没有要做的事。新建一条 —— 开始和完成各抽一次精灵</p>
+    </div>
+
+    <!-- 已完成 / 已放弃：划掉的东西沉到这儿（docs 9.5）。
+         默认只展开最近几条，多的折起来 —— 待办做完是永久划掉的、只增不减，
+         全展开会把页面撑爆，而人只看最近划掉的那几条 -->
+    <div v-if="state.finished.length" class="finished-block">
+      <button class="finished-head" @click="showAllFinished = !showAllFinished">
+        <span class="finished-title">已完成 {{ state.finishedTotal }} 条</span>
+        <span class="finished-toggle">{{ showAllFinished ? '收起' : '展开' }}</span>
+      </button>
+      <div class="finished-list">
+        <div
+          v-for="task in visibleFinished"
+          :key="task.id"
+          class="finished-row"
+          :class="{ 'finished-abandoned': task.status === 'abandoned' }"
+        >
+          <span class="finished-name">{{ task.name }}</span>
+          <span v-if="task.status === 'abandoned'" class="finished-tag">已放弃</span>
+          <span class="finished-date">{{ formatTime(task.resolved_at) }}</span>
+          <button class="finished-del" title="删掉这条记录" @click="removeTask(task)">×</button>
+        </div>
+      </div>
+      <p v-if="!showAllFinished && hiddenFinished > 0" class="finished-more">
+        更早的还有 {{ hiddenFinished }} 条
+      </p>
     </div>
 
     <!-- 距下一颗的进度。
@@ -349,6 +397,10 @@ const emptyState = {
   maxDailyStars: 25,
   nextCost: null,
   tasks: [],
+  // 已完成 / 已放弃的待办（后端只给最近 N 条，finishedTotal 才是全量条数）
+  finished: [],
+  finishedTotal: 0,
+  finishedLimit: 30,
   logs: [],
   todayDraws: [],
   poolRemaining: 0,
@@ -360,8 +412,28 @@ const state = ref({ ...emptyState })
 const notice = ref(null)
 let noticeTimer = null
 
-// 正在抽精灵的任务 id（空串 = 没有请求在飞），用来在请求期间禁用「完成」按钮
-const completingId = ref('')
+// 正在处理的任务 id（空串 = 没有请求在飞），用来在请求期间禁用这条的所有按钮。
+// 开始 / 完成 / 放弃三个动作共用它 —— 它们都得防连点
+const actingId = ref('')
+
+// 已完成区是否展开到全部。默认只显示最近几条（见下面 visibleFinished）
+const showAllFinished = ref(false)
+
+// 折叠时显示几条。后端一次给 30 条（够展开用），默认先露 10 条
+const FINISHED_PREVIEW = 10
+const visibleFinished = computed(() => (
+  showAllFinished.value
+    ? state.value.finished
+    : state.value.finished.slice(0, FINISHED_PREVIEW)
+))
+
+// 被折起来、没显示出来的条数，用来决定要不要说「更早的还有 N 条」。
+// **必须拿 finishedTotal 减「真正显示出来的条数」，不能减 finished.length** ——
+// 后端一次给 30 条，finishedTotal 是 14 的时候 14 > 14 为假，于是藏了 4 条
+// 却一个字都不说，人会以为总共就这 10 条
+const hiddenFinished = computed(() => (
+  state.value.finishedTotal - visibleFinished.value.length
+))
 
 // 收集册（洛克贝的消费去向）。形状整体从后端来，前端一条自己的规则都不加 ——
 // 「有哪些本、每本几格、每格多少钱」全在后端的数据文件里（docs 8.9）
@@ -530,8 +602,10 @@ const save = async () => {
   }
 }
 
+// **只有已完成区调这个** —— 待办 / 进行中的不给删除按钮，不想做了走「放弃」
+// （放弃会留一条记录，删除是把痕迹也抹掉，那是两回事，见 docs 9.5 / 9.6）
 const removeTask = async (task) => {
-  if (!confirm(`确定要删除「${task.name}」吗？`)) return
+  if (!confirm(`确定删掉「${task.name}」这条记录吗？`)) return
 
   try {
     const res = await starlightApi.deleteTask(task.id)
@@ -552,45 +626,76 @@ const showNotice = (payload, type = 'success') => {
   }, 3500)
 }
 
-const completeTask = async (task) => {
-  // 正在抽精灵的任务 id。浮窗是不挡操作的（点完成不会被弹窗挡住），
-  // 所以更得防连点：连点两下会一次任务抽走两只精灵，还破坏「不放回」的语义。
+// 动作 key → 接口。三个动作长得一样，只有「放弃」不抽卡
+const ACTION_API = {
+  start: starlightApi.startTask,
+  complete: starlightApi.completeTask,
+  abandon: starlightApi.abandonTask
+}
+
+// 动作 key → 按钮样式。开始和完成共用绿色：**它俩永不同时出现**（待办上只有开始，
+// 进行中只有完成，由后端的状态机保证），所以不用担心分不清哪个是主行动。
+// 放弃用红色：它不可逆（划掉就进已完成区了），得有点分量
+const actionClass = (key) => (key === 'abandon' ? 'btn-danger' : 'btn-success')
+
+// 一条待办的一个动作。act 是后端 actions 数组里的那一项（{ key, label, draw }）
+const runAction = async (task, act) => {
+  // 放弃是不可逆的，问一下。「开始」和「完成」不问 —— 完成本来就是这一步的终点，
+  // 多一次确认反而把「点一下就有奖励」的手感打断了
+  if (act.key === 'abandon' && !confirm(`确定放弃「${task.name}」吗？放弃之后不能再抽卡了。`)) return
+
+  // 一次只放一个动作过去。浮窗是不挡操作的（点按钮不会被弹窗挡住），
+  // 所以更得防连点：连点两下「开始」会一条任务抽走两只精灵，还破坏「不放回」的语义。
   // 后端有一把按用户分的锁兜底，这里挡在第一线。
-  if (completingId.value) return
-  completingId.value = task.id
+  if (actingId.value) return
+  actingId.value = task.id
 
   try {
-    const res = await starlightApi.completeTask(task.id)
+    const res = await ACTION_API[act.key](task.id)
 
     if (res.code === 0) {
       state.value = { ...state.value, ...res.data.state }
-      showSpiritNotice(res.data)
+
+      if (res.data.spirit) {
+        // 「开始」和「完成」都抽到了精灵 → 弹结果卡
+        showSpiritNotice(res.data)
+      } else if (res.data.noDraw) {
+        // 完成了，但今天精灵抽完了：**事记上了、只是没抽到卡**。不说一声的话
+        // 会以为这条白干了（后端为什么放行见 docs 9.3）
+        showNotice({ text: `「${res.data.taskName}」记上了 · ${res.data.noDraw}` }, 'error')
+      }
+      // 「放弃」两样都没有：划掉就行，不弹东西
     } else {
-      // 「今天的精灵都抽完了」也走这里，用同一条浮窗提示，不弹 alert 打断
-      showNotice({ text: res.message || '完成失败' }, 'error')
+      // 状态不对（对一条待办点「完成」）和「今天的精灵都抽完了」都走这里，
+      // 用同一条浮窗提示，不弹 alert 打断
+      showNotice({ text: res.message || `${act.label}失败` }, 'error')
     }
   } catch (error) {
-    showNotice({ text: '完成失败' }, 'error')
+    showNotice({ text: `${act.label}失败` }, 'error')
   } finally {
-    completingId.value = ''
+    actingId.value = ''
   }
 }
 
-// 抽到精灵的浮窗：头像 + 名字 + 编号 + 本次进账的洛克贝（倍率用小标跟在后面）。
+// 抽到精灵的浮窗：头像 + 本次进账的洛克贝（倍率用小标跟在后面）。
 //
 // 只有这里写**实际进账**的数（+24000），跟小卡片 / 弹窗上的 1200×10 故意不一样：
 // 这句是个 `+N` 的记账，写基础值等于报错账。后面那个 1200×10 就是给人对账用的。
+//
+// **标题写的是「因为哪一步给的」**（docs 9.9）：「开始」和「完成」都弹这张卡，
+// 光看「抽到妙蛙种子」分不出是开始还是完成给的奖励。精灵名字挪到下面那行。
 const showSpiritNotice = (data) => {
   const spirit = data.spirit
   const condensed = data.state && data.state.condensedNow > 0
     ? ` · 凝结出 ${data.state.condensedNow} 颗许愿星`
     : ''
+  const label = data.action === 'start' ? '开始' : '完成'
 
   showNotice({
     // 头像加载失败过就整块不传，让 Toast 那格不渲染（不然是个破图）
     thumb: broken.value[spirit.id] ? '' : cardImage(spirit),
-    title: displayName(spirit),
-    text: `No.${spirit.number} · +${data.rocoEarned} 洛克贝${condensed}`,
+    title: `${label}「${data.taskName}」`,
+    text: `No.${spirit.number} ${displayName(spirit)} · +${data.rocoEarned} 洛克贝${condensed}`,
     badge: spirit.rocoMultiplier > 1
       ? { text: `${baseRoco(spirit)}×${spirit.rocoMultiplier}`, title: rocoTitle(spirit) }
       : null
@@ -638,8 +743,12 @@ const buyDish = async (book, item) => {
   }
 }
 
+// **一律 Number() 一下再交给 Date**：这个页面里的时间戳来源不止一种 ——
+// 流水是从 zset 里 JSON.parse 出来的数字，收集册的 doneAt 是后端 parseInt 过的数字，
+// 而待办的 resolved_at 是从 hash 里出来的**字符串**。`new Date('1789...')`
+// 解析不了数字字符串，会安静地给你一个 Invalid Date（页面上就显示 "Invalid Date"）
 const formatTime = (timestamp) => {
-  return new Date(timestamp).toLocaleString('zh-CN', {
+  return new Date(Number(timestamp)).toLocaleString('zh-CN', {
     month: 'numeric',
     day: 'numeric',
     hour: '2-digit',
@@ -1110,10 +1219,16 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
+.task-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.3rem;
+}
+
 .task-name {
   font-size: 1.05rem;
   font-weight: 700;
-  margin-bottom: 0.3rem;
 }
 
 .task-meta {
@@ -1128,6 +1243,121 @@ onUnmounted(() => {
 .task-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+/* 进行中：这一条是「现在手上这件事」，得从一列待办里跳出来。
+   金色描边 + 一点光晕，跟待办（蓝边卡片）分开 */
+.task-doing {
+  border-color: rgba(255, 215, 0, 0.45);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 0 18px rgba(255, 215, 0, 0.12);
+}
+
+.task-flag {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #1A1A2E;
+  background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+}
+
+/* ---- 已完成区（划掉的东西沉到这儿，docs 9.5）---- */
+
+.finished-block {
+  margin-top: 1rem;
+}
+
+.finished-head {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: none;
+  border: none;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+  padding: 0.85rem 0.25rem 0.5rem;
+  cursor: pointer;
+  font-family: 'Nunito', sans-serif;
+  color: #B0B0B0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  transition: color 0.3s ease;
+}
+
+.finished-head:hover {
+  color: #fff;
+}
+
+.finished-toggle {
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.finished-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.finished-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* 「划掉」就真的划掉：一条删除线。这是这一区的全部视觉重点 */
+.finished-name {
+  flex: 1;
+  font-size: 0.92rem;
+  color: rgba(255, 255, 255, 0.5);
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.35);
+}
+
+/* 放弃的比完成的更淡一点，再挂个标签 —— 它跟「做完了」不是一回事 */
+.finished-abandoned .finished-name {
+  color: rgba(255, 255, 255, 0.32);
+  text-decoration-color: rgba(255, 255, 255, 0.22);
+}
+
+.finished-tag {
+  font-size: 0.7rem;
+  color: rgba(231, 76, 60, 0.85);
+  border: 1px solid rgba(231, 76, 60, 0.35);
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  white-space: nowrap;
+}
+
+.finished-date {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.32);
+  white-space: nowrap;
+}
+
+.finished-del {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.25);
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.finished-del:hover {
+  color: #E74C3C;
+}
+
+.finished-more {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.35);
+  text-align: center;
+  padding: 0.6rem 0 0;
 }
 
 .form-hint {

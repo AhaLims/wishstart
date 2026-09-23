@@ -67,7 +67,7 @@ async function loadProgress(store, userId) {
 }
 
 // 买一格。成功返回 { ok: true, ... }，失败返回 { ok: false, message }，
-// 由路由把 message 原样给前端（跟 completeStarlightTask 一个约定）。
+// 由路由把 message 原样给前端（跟 starlight.js 的 advanceTask 一个约定）。
 async function buyItem(store, userId, bookId, itemId) {
   const book = getBook(bookId);
   if (!book) return { ok: false, message: '没有这本收集册' };
@@ -76,7 +76,15 @@ async function buyItem(store, userId, bookId, itemId) {
   const item = items.find((it) => it.id === itemId);
   if (!item) return { ok: false, message: '这本里没有这样东西' };
 
-  return withLock(`collection:${userId}`, async () => {
+  // **锁 key 必须跟抽卡那条路用同一个**（services/starlight.js 的 advanceTask）。
+  // 两边动的是同一份 roco_balance：抽卡 +N（hincrby）、这里 -N。而
+  // hincrby 在两个 store 里都是「读出 → 加 → 写回」，不是原子的，
+  // 各抢各的锁就会撞车 —— 一边加一边减，后写的把先写的盖掉，凭空少一笔钱。
+  //
+  // 用 `starlight:` 而不是一个中立的 key，是因为这笔钱就存在
+  // `wishstar:starlight:<userId>` 那把 hash 里，锁按被保护的资源命名最不容易走偏。
+  // 两条路都是「进锁 → 直接干活」，没有嵌套，共用一把锁不会死锁
+  return withLock(`starlight:${userId}`, async () => {
     // 先 ensure 一次：roco_balance 的老数据迁移（补成 roco_total）就在
     // ensureStarlight 里，不先跑一遍这里读到的是 undefined
     await ensureStarlight(store, userId);
