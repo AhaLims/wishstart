@@ -210,7 +210,20 @@ router.get('/', async (req, res) => {
       return r.created_at ? getPeriod(new Date(r.created_at)) : (r.period || 'other');
     };
 
-    // 统计各时段星星 + 工时。「其他」（0-6 点）单列一格
+    // 记录是不是「时间型」的（25min 型任务的完成记录 / 标了 25min 型的快速记录）。
+    //
+    // **别拿「工时大于 0」当判据**：设成 30 分钟的时间型任务也是时间型（星星
+    // 要算进早上/下午/晚上），但它的工时是 0（折算只认同 25 分钟的那个）。
+    // 用工时反推会把这一类悄悄挪进「其他」。
+    const isTimeRecord = (r) => r.type === 'time_task' || r.type === 'quick_time';
+
+    // 统计各格星星 + 工时。
+    //
+    // 星星按**两根不同的轴**分（见 docs 第 3 条）：
+    //   时间型的 → 按完成时段进 早上 / 下午 / 晚上
+    //   非时间型的 → 全进「其他」，不按时段拆
+    // 因此**四格之和 === 今日总计**，而「早上」不再包含「到达」那种通用型任务的星星
+    // （2026-09-23 改的口径：以前四格是「把一天切成四段」，每格算全部星星）。
     let totalStars = 0;
     let morningStars = 0;
     let afternoonStars = 0;
@@ -231,6 +244,12 @@ router.get('/', async (req, res) => {
       const mins = minutesOf(r, taskMinutes);
       totalMinutes += mins;
 
+      if (!isTimeRecord(r)) {
+        // 非时间型的没有工时，下面那几段一段都不进
+        otherStars += r.stars;
+        return;
+      }
+
       if (period === 'morning') {
         morningStars += r.stars;
         morningMinutes += mins;
@@ -241,9 +260,10 @@ router.get('/', async (req, res) => {
         eveningStars += r.stars;
         eveningMinutes += mins;
       } else {
-        // 其他时段只有星星，工时**不给**（页面上那一格是空的）。
-        // 不是漏写：0-6 点的工时折算口径还没定，与其显示一个没人认领的数字，
-        // 不如空着。totalMinutes 照旧含它，所以三段加起来可能比总计少。
+        // 剩下的只有「0-6 点的时间型记录」这一种（getPeriod 的 other）。
+        // **暂时也落在「其他」里，但不能让它消失** —— 四格之和必须还是等于今日总计。
+        // 「其他」现在的主含义是「非时间型」，0-6 点这一档怎么算还没定（用户口径：
+        // 碰上了再定）；等定了再把它拆出去，别在这儿悄悄丢掉一笔星星。
         otherStars += r.stars;
       }
     });

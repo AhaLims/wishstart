@@ -35,11 +35,15 @@
         <div class="stat-unit">🌙</div>
       </div>
 
-      <!-- 0-6 点记录的那一档。以前没有这一格，凌晨的星星会被并进早上或晚上 -->
+      <!-- 「其他」装的是**非时间型任务**的星星（2026-09-23 改的口径）。
+           上面三格只算时间型的、按时段分，这一格是非时间型的一坨 ——
+           所以**四格之和 === 今日总计**，「早上」不再包含「到达」那种任务。
+           （原来这格是「凌晨 0-6 点」，图标是 🕛；现在含义变了，图标跟着换掉，
+           别再换回时钟。） -->
       <div class="stat-card">
         <div class="stat-label">其他</div>
         <div class="stat-value number">{{ recordsData.otherStars }}</div>
-        <div class="stat-unit">🕛</div>
+        <div class="stat-unit">✨</div>
       </div>
     </div>
 
@@ -70,13 +74,14 @@
       </div>
 
       <!-- 「其他」这一格的工时**故意留空**（需求就是这么定的）：
-           0-6 点的工时折算口径还没定，先不显示。
-           里面的 &nbsp; 不能删 —— 空的 div 没有行高，卡片里的 🕛 会往上跑，
+           那格里装的非时间型任务本来就没有工时（工时只有 25min 型才折算），
+           所以不是算不出来，是本来就没有。
+           里面的 &nbsp; 不能删 —— 空的 div 没有行高，卡片里的图标会往上跑，
            跟旁边那几张的图标错开一整行 -->
       <div class="stat-card time-card">
         <div class="stat-label">其他</div>
         <div class="stat-value-number time-value">&nbsp;</div>
-        <div class="stat-unit">🕛</div>
+        <div class="stat-unit">✨</div>
       </div>
     </div>
 

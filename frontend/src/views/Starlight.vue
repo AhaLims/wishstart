@@ -23,20 +23,20 @@
         </div>
       </div>
 
+      <!-- 大数给的是**可花余额**，不是「累计获得」（2026-09-23 改）。
+           累计（rocoTotal）只涨不跌、是攒钱的爽点，但它一分都花不出去 ——
+           把不能花的数摆在最显眼的位置，人会以为那笔钱能花。下面那口锅扣的是
+           余额，所以大数给余额，累计从这张卡上撤掉。
+           下方小字照旧是「今天获得」。
+           （docs 8.1 原来要求「总数」和「余额」并排显示、两个数都不能少，
+           那条口径被这条覆盖。） -->
       <div class="card overview-card">
         <div class="overview-label">
-          <img class="roco-ico" :src="rocoIcon" alt="" />洛克贝总数
+          <img class="roco-ico" :src="rocoIcon" alt="" />可花余额
         </div>
-        <div class="overview-value overview-roco number">{{ state.rocoTotal }}</div>
+        <div class="overview-value overview-roco number">{{ state.rocoBalance }}</div>
         <div class="overview-today">
           今天获得 <b class="number today-roco">+{{ state.rocoToday }}</b>
-        </div>
-        <!-- 可花余额：下面那口锅扣的就是这个数。
-             **跟上面的「总数」并排是有意的** —— 上面那个是「累计获得」，只涨不跌，
-             那是攒钱唯一的爽点；一消费就往回走的只能是余额，所以两个数必须分开
-             显示，不能拿总数去减（见 docs 8.1）。 -->
-        <div class="overview-balance">
-          可花余额 <b class="number">{{ state.rocoBalance }}</b>
         </div>
       </div>
     </div>
@@ -208,34 +208,11 @@
       </p>
     </div>
 
-    <!-- 距下一颗的进度。
-         **这里一个星光值的数字都不写** —— 用户要求星光值彻底不显示，
-         只留「下一颗许愿星」和进度比例，比例就是下面这条进度条本身。
-         原来右边写的是 `62 / 80`、下面还写「还差 18 星光值」，
-         等于把内部计价单位摊在台面上，别再加回来。 -->
-    <div class="card progress-card">
-      <template v-if="state.nextCost !== null">
-        <div class="progress-head">
-          <span>距离下一颗许愿星</span>
-          <span class="progress-tier">今天第 {{ state.todayCondensed + 1 }} / {{ state.maxDailyStars }} 颗</span>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
-        </div>
-        <p class="progress-note">再攒一些就自动凝结出下一颗，不用手动收</p>
-      </template>
-      <template v-else>
-        <div class="progress-head">
-          <span>今天已经凝结满 {{ state.maxDailyStars }} 颗了</span>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill progress-fill-full"></div>
-        </div>
-        <p class="progress-note">
-          星光值每天清零，明天重新开始 —— 已经凝结的许愿星和洛克贝都不受影响
-        </p>
-      </template>
-    </div>
+    <!-- 原来这里有一整块「距下一颗许愿星的进度条」，2026-09-23 整块删掉，
+         **不要再加回来**。凝结是全自动的、不用手动收，那条进度条给出的信息
+         （还差多少、今天第几颗）没有任何一个动作依赖它 —— 它只是把内部计价
+         单位换了个说法摆在台面上占一屏。上面那张「凝结许愿星总数 + 今天凝结了
+         N 颗」已经把结果说完了。 -->
 
     <!-- 今日抽到的精灵 -->
     <div class="section-head">
@@ -553,12 +530,6 @@ const newName = ref('')
 const adding = ref(false)
 const addError = ref('')
 const addInput = ref(null)
-
-const progressPercent = computed(() => {
-  if (!state.value.nextCost) return 100
-  const pct = (state.value.value / state.value.nextCost) * 100
-  return Math.min(100, Math.max(0, pct))
-})
 
 const fetchState = async () => {
   try {
@@ -881,19 +852,10 @@ onUnmounted(() => {
   color: #FFD700;
 }
 
-/* 「可花余额」那一行。跟上面两行用一条虚线隔开 —— 上面是「攒了多少」，
-   这一行是「还能花多少」，是两件事，不隔开容易被当成同一笔账的另一种说法 */
-.overview-balance {
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
-  border-top: 1px dashed rgba(255, 215, 0, 0.25);
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.overview-balance b {
-  color: #FFD700;
-}
+/* .overview-balance 和整块 .progress-* 都在 2026-09-23 删掉了：
+   前者那行「可花余额」并进了上面的主数字（大数改成余额），
+   后者是那条「距下一颗许愿星」的进度条，整块从页面上撤了。
+   别再照着老结构加回来。 */
 
 /* 洛克贝图标。跟着字走，所以用 vertical-align 而不是 flex —— 它出现在标题、
    卡片、流水好几个高度不一样的地方 */
@@ -902,50 +864,6 @@ onUnmounted(() => {
   height: 1.05em;
   vertical-align: -0.18em;
   margin-right: 0.25rem;
-}
-
-.progress-card {
-  margin-bottom: 1.5rem;
-}
-
-.progress-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-size: 0.9rem;
-  color: #B0B0B0;
-  margin-bottom: 0.6rem;
-}
-
-/* 右上角「今天第 2 / 25 颗」。**这里不写星光值**，只报颗数 */
-.progress-tier {
-  color: #7FB2FF;
-}
-
-.progress-track {
-  height: 10px;
-  border-radius: 6px;
-  background: rgba(26, 26, 46, 0.9);
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  border-radius: 6px;
-  background: linear-gradient(90deg, #4A90D9 0%, #7FB2FF 100%);
-  transition: width 0.35s ease;
-}
-
-/* 凝满 25 颗那条满格。宽度写死在 CSS 里而不是靠 progressPercent ——
-   那时候 nextCost 是 null，算出来的是个假比例 */
-.progress-fill-full {
-  width: 100%;
-}
-
-.progress-note {
-  margin-top: 0.6rem;
-  font-size: 0.85rem;
-  color: #B0B0B0;
 }
 
 /* 以前这里有一整块「抽到精灵的结果卡」（.result-card / .result-thumb / .result-fade
