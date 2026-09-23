@@ -89,6 +89,16 @@ function taskStatus(task) {
   return task.status || TASK_TODO;
 }
 
+// 任务名压成单行（名字里可以带换行，见 docs 9.10）。
+//
+// 流水、提示语都是**一行排下来的**，把名字原样塞进去的话，名字里那个 \n
+// 会把这一行从中间劈开 —— 流水看着像记了两条、提示语看着像说了一半。
+// 只把换行前后的空白压成一个空格，名字本身的字一个字不动。
+//
+// 前端也有一个同名同行为的 oneLine，两边是**故意各留一份**的：那边管
+// confirm 和结果卡标题，这边管流水和报错文案，谁也不该为了省几行去依赖对方。
+const oneLine = (name) => String(name || '').replace(/\s*\n\s*/g, ' ');
+
 const stateKey = (userId) => `wishstar:starlight:${userId}`;
 const taskKey = (taskId) => `wishstar:starlight_task:${taskId}`;
 const taskIndexKey = (userId) => `wishstar:starlight_tasks:${userId}`;
@@ -263,7 +273,11 @@ async function ensureStarlight(store, userId, now = new Date()) {
 // 不放回的保证就破了，一次动作白得两只。
 //
 // 抽不到精灵时返回 { error }，调用方原样把 message 给前端。
-async function drawForTask(store, task, now) {
+//
+// actionLabel 是这次动作的中文名（「开始」/「完成」，取自 TASK_ACTIONS），
+// 只用来写流水文案。**别改成传 action 再在里面查表** —— 表在调用方那边，
+// 这里多一份查表就多一个走偏的机会。
+async function drawForTask(store, task, now, actionLabel) {
   const userId = task.user_id;
   const date = getBeijingDate(now);
 
@@ -334,12 +348,20 @@ async function drawForTask(store, task, now) {
 
   // 流水整份是**洛克贝**的（用户要求：记录里只留洛克贝，不出现星光值和
   // 许愿星的流水）。旧的星光值/许愿星流水躺在存储里不动，页面按 unit 过滤掉
+  //
+  // 文案前面带上「哪个动作 + 哪条待办」，好让人对得上账：光看「抽到噼啪鸟」
+  // 不知道这笔钱是干什么挣的，一天几十抽更是完全分不清。
+  //
+  // **名字是当场抄进来的文字快照，不是指向任务的引用**（没有存 task.id）。
+  // 这是有意的：任务删掉之后这条流水照旧念得通、也照旧查得到是给谁发的钱；
+  // 改成存 id 再回查的话，删掉的任务会让这条流水变成一句没头没尾的话。
+  // 代价是任务改名不会回溯改这里 —— 那正好是想要的，流水记的是当时发生的事。
   await addLog(store, userId, {
     type: 'income',
     category: 'starlight_task',
     amount: rocoEarned,
     unit: '洛克贝',
-    description: `抽到「${spirit.name}」获得 ${rocoEarned} 洛克贝` +
+    description: `${actionLabel}「${oneLine(task.name)}」，抽到「${spirit.name}」获得 ${rocoEarned} 洛克贝` +
       // 翻倍了就得说一声：流水上的数字比图鉴上大，不解释看着像算错。
       // 用 formLabel 把**是哪几个标签**写出来（「首领化 · 异色 ×20」），
       // 笼统写「异色/特殊形态」看不出 20 倍是怎么来的
@@ -377,13 +399,14 @@ async function advanceTask(store, task, action, now = new Date()) {
 
     const status = taskStatus(fresh);
     if (!spec.from.includes(status)) {
-      return { error: `「${fresh.name}」是${TASK_STATUS_LABEL[status]}，不能${spec.label}` };
+      // 名字压单行再拼：这句是要弹给用户看的提示，名字里带换行会把提示劈成两截
+      return { error: `「${oneLine(fresh.name)}」是${TASK_STATUS_LABEL[status]}，不能${spec.label}` };
     }
 
     let draw = null;
     let noDraw = null;
     if (spec.draw) {
-      const result = await drawForTask(store, fresh, now);
+      const result = await drawForTask(store, fresh, now, spec.label);
       if (result.error) {
         // 「开始」抽不出就整个拒绝，状态原地不动 —— 下面什么都还没写，是原子的。
         // 「完成」抽不出照样往下走：**事已经做完了，不该被抽卡机制挡在门外**。
