@@ -110,7 +110,6 @@
          **开始和完成各抽一次精灵**（奖励完成，也奖励开始），做完就划掉 -->
     <div class="section-head tasks-head">
       <h2 class="section-title">今天要做的事</h2>
-      <button class="btn btn-primary btn-sm" @click="openCreate">+ 新建</button>
     </div>
 
     <div v-if="state.tasks.length" class="task-list">
@@ -158,8 +157,30 @@
 
     <div v-else class="card empty-state">
       <div class="empty-state-icon">✨</div>
-      <p>还没有要做的事。新建一条 —— 开始和完成各抽一次精灵</p>
+      <p>还没有要做的事 —— 在下面加一条，开始和完成各抽一次精灵</p>
     </div>
+
+    <!-- 加一条：常驻在列表下面的一条输入行，不再弹框（docs 9.10）。
+         待办是「想到什么就加什么」的高频动作，弹框要先点按钮、写完再点保存，
+         等于把最轻的一步做成了最重的。回车就加，加完光标留在输入框里，
+         可以连着敲三四条 -->
+    <div class="task-add">
+      <input
+        ref="addInput"
+        v-model="newName"
+        class="input task-add-input"
+        placeholder="加一条要做的事，回车就行"
+        @keyup.enter="addTask"
+      />
+      <button
+        class="btn btn-primary btn-sm"
+        :disabled="!newName.trim() || adding"
+        @click="addTask"
+      >
+        {{ adding ? '···' : '添加' }}
+      </button>
+    </div>
+    <p v-if="addError" class="form-error task-add-error">{{ addError }}</p>
 
     <!-- 已完成 / 已放弃：划掉的东西沉到这儿（docs 9.5）。
          默认只展开最近几条，多的折起来 —— 待办做完是永久划掉的、只增不减，
@@ -291,10 +312,11 @@
       洛克贝能拿去下锅，凝结出来的许愿星暂时还不能兑换东西。
     </p>
 
-    <!-- 新建 / 编辑弹框 -->
+    <!-- 编辑弹框。**新建不走这里了** —— 列表下面那条常驻输入行就是新建（docs 9.10），
+         所以标题不再需要分「新建 / 编辑」两种 -->
     <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
       <div class="modal">
-        <h3 class="modal-title">{{ editingId ? '编辑任务' : '新建星光值任务' }}</h3>
+        <h3 class="modal-title">编辑任务</h3>
 
         <div class="form-group">
           <label class="label">任务名称</label>
@@ -525,6 +547,13 @@ const editingId = ref('')
 const form = ref({ name: '' })
 const formError = ref('')
 
+// 加一条用的状态（docs 9.10）。跟编辑弹框那套完全分开：
+// 新建不再借用 form / formError，省得两条路互相把对方的值擦掉
+const newName = ref('')
+const adding = ref(false)
+const addError = ref('')
+const addInput = ref(null)
+
 const progressPercent = computed(() => {
   if (!state.value.nextCost) return 100
   const pct = (state.value.value / state.value.nextCost) * 100
@@ -553,13 +582,6 @@ const fetchCollections = async () => {
   }
 }
 
-const openCreate = () => {
-  editingId.value = ''
-  form.value = { name: '' }
-  formError.value = ''
-  showModal.value = true
-}
-
 const openEdit = (task) => {
   editingId.value = task.id
   form.value = { name: task.name }
@@ -577,19 +599,44 @@ const validateForm = () => {
   return ''
 }
 
+// **列表下面那条常驻输入行的提交**（docs 9.10）。
+// 请求跑着的时候先挡住重复提交，回来再清空 —— 加失败的话名字还留在
+// 输入框里，不用重敲一遍。成功后把光标按回去，好接着敲下一条
+const addTask = async () => {
+  const name = newName.value.trim()
+  if (!name || adding.value) return
+
+  adding.value = true
+  addError.value = ''
+
+  try {
+    const res = await starlightApi.createTask({ userId: userStore.userId, name })
+    if (res.code === 0) {
+      newName.value = ''
+      await fetchState()
+      if (addInput.value) addInput.value.focus()
+    } else {
+      addError.value = res.message || '没加上'
+    }
+  } catch (error) {
+    addError.value = '没加上'
+  } finally {
+    adding.value = false
+  }
+}
+
+// **弹框现在只用来编辑**，新建走 addTask
 const save = async () => {
+  if (!editingId.value) return
+
   const error = validateForm()
   if (error) {
     formError.value = error
     return
   }
 
-  const payload = { name: form.value.name.trim() }
-
   try {
-    const res = editingId.value
-      ? await starlightApi.updateTask(editingId.value, payload)
-      : await starlightApi.createTask({ userId: userStore.userId, ...payload })
+    const res = await starlightApi.updateTask(editingId.value, { name: form.value.name.trim() })
 
     if (res.code === 0) {
       closeModal()
@@ -1209,6 +1256,28 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+/* 加一条：常驻在列表下面（docs 9.10）。边框走虚线，跟上面实心的任务卡片
+   区分开 —— 一眼看出它不是一个任务，是个输入的地方；聚焦了才变实线 */
+.task-add {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.task-add-input {
+  flex: 1;
+  border-style: dashed;
+}
+
+.task-add-input:focus {
+  border-style: solid;
+}
+
+.task-add-error {
+  margin-top: 0.5rem;
 }
 
 .task-card {
