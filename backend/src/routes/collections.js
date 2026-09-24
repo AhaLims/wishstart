@@ -29,7 +29,21 @@ async function buildCollections(store, userId) {
       owned: ownedIds,
       ownedCount: ownedIds.length,
       totalCount: items.length,
-      // 没集齐就是 null，**不能给 0** —— 0 会被前端 formatTime 成 1970 年
+      // **「齐没齐」和「哪天齐的」是两件事，别用一个字段一块儿回答。**
+      // isComplete 是**数出来的**，驱动锅发光、和「🎉 / 还差 N 样」那半个分支；
+      // doneAt 只负责「完成于 X」那句日期。
+      //
+      // 用 `>=` 不用 `===`：万一以后从数据文件里删掉一个格子，用户那个
+      // collection set 里会永远留着它（没有删除路径），`===` 就永远为假，
+      // 整锅再也不会发光了
+      isComplete: ownedIds.length >= items.length,
+      // 没集齐就是 null，**不能给 0** —— 0 会被前端 formatTime 成 1970 年。
+      //
+      // 这个字段是**只写不清**的（hset 一次，从没有 hdel，jsonStore 也没有 hdel），
+      // 所以「一本集齐过、后来又加了格子」时它还是那个旧时间戳。**这不是问题**：
+      // 那时 isComplete 已经是 false，前端只在 isComplete 为真时才显示日期 ——
+      // 这正是把两个问题拆成两个字段的原因。以前只有 doneAt 一个字段时，
+      // 页面会一边显示「🎉 这一锅齐了」一边写着「还差 18 样」，下面还照样能买
       doneAt: done[book.id] ? parseInt(done[book.id]) : null
     };
   });

@@ -65,8 +65,13 @@
 
       <!-- 锅。**汤一直在冒泡**（纯 CSS，不是点击才动）—— 这页因此是「活着」的，
            每次打开都在动。这条比下面那下解锁动画更影响体感，别做成一张静止的图。
-           集齐之后整锅发光（.pot-done），永久保留，不再能买（docs 8.4）。 -->
-      <div class="pot" :class="{ 'pot-done': book.doneAt }">
+           集齐之后整锅发光（.pot-done），永久保留，不再能买（docs 8.4）。
+
+           **发光看 isComplete，不看 doneAt** —— 那是两个问题：isComplete 是后端
+           数出来的「这一本齐了没」，doneAt 是「哪天齐的」。以前只有一个 doneAt，
+           而它是**只写不清**的（一本集齐过就永远留着那个时间戳），所以往集齐的
+           册子里加格子之后，页面会一边发光写着🎉、一边写着「还差 18 样」（2026-09-24 拆开） -->
+      <div class="pot" :class="{ 'pot-done': book.isComplete }">
         <div class="pot-bubbles" aria-hidden="true">
           <span v-for="n in 8" :key="n" class="bubble" :style="{ '--i': n }"></span>
         </div>
@@ -80,6 +85,7 @@
               'dish-owned': isOwned(book, item),
               'dish-dropping': droppingId === item.id
             }"
+            :style="droppingId === item.id ? { '--drop': dropDist + 'px' } : null"
           >
             <!-- 空格子上的剪影就是**同一个 emoji 压黑**，不另做一套图（docs 8.5）。
                  emoji 本身是彩色的，filter 一压就只剩轮廓，正好当「还没买」的形状 -->
@@ -92,12 +98,17 @@
                  副本 —— 抽卡挣的钱更新的是 state 那份，这个副本不知道，于是钱够了
                  按钮还是灰的，非得刷新页面才买得了（2026-09-23 修）。
                  余额在页面上只有一份，别在这儿再存一份。 -->
+            <!-- 买过之后按钮**不摘掉、只是藏起来**（visibility 而不是 v-if）：
+                 摘掉它这一格就矮约 22px，而网格的行高取该行最高的格子 ——
+                 于是每买一格，这一行以下的整排会瞬间上跳一次，正撞在下锅动画上。
+                 格子多了之后（6 行半）买最上面一格能带动 5 排一起跳（2026-09-24 修）。
+                 visibility: hidden 的元素点不着、也拿不到焦点，跟摘掉一样干净 -->
             <button
-              v-if="!isOwned(book, item)"
               class="dish-buy"
+              :class="{ 'dish-buy-off': isOwned(book, item) }"
               :disabled="!!buyingId || state.rocoBalance < item.price"
               :title="`花 ${item.price} 洛克贝把「${item.name}」${book.action}`"
-              @click="buyDish(book, item)"
+              @click="buyDish(book, item, $event)"
             >
               <template v-if="buyingId === item.id">…</template>
               <template v-else>
@@ -109,9 +120,12 @@
       </div>
 
       <!-- 集齐那一刻：顶上出现完成文案 + 日期。**日期从后端的集齐时间戳来**，
-           不是拿「格子数够了」现场推 —— 那样推不出是哪天完成的（docs 8.2） -->
-      <p v-if="book.doneAt" class="pot-done-note">
-        🎉 {{ book.doneTitle }} —— {{ book.doneNote }}（{{ formatTime(book.doneAt) }}）
+           不是拿「格子数够了」现场推 —— 那样推不出是哪天完成的（docs 8.2）。
+           但**「齐没齐」和「哪天齐的」是两问**：分支看 isComplete，日期看 doneAt。
+           日期偶尔会缺（比如快照导入只带了格子、没带这个 hash），那种时候
+           只显示🎉、不显示空的括号 —— 不能因为缺个日期就当作没集齐 -->
+      <p v-if="book.isComplete" class="pot-done-note">
+        🎉 {{ book.doneTitle }} —— {{ book.doneNote }}<template v-if="book.doneAt">（{{ formatTime(book.doneAt) }}）</template>
       </p>
       <p v-else class="pot-note">
         洛克贝是抽精灵进账的，攒够了就往锅里下一样。
@@ -496,6 +510,12 @@ const buyingId = ref('')
 // 不摘的话下次再买别的东西它不会重播 —— CSS 动画只在 class 变化时触发一次
 const droppingId = ref('')
 let dropTimer = null
+// 「掉进锅里」那一下的起点，离这一格多远。**这个距离必须跟着格子在第几行走**：
+// 动画是从格子上方一个固定距离掉下来的，格子越靠下，那点距离就越是在锅里面 ——
+// 到最下面几行就不再是「从锅口掉进来」，而是「在汤里凭空出现、往下滑一格」。
+// 所以买之前量一次这一格到锅口的真实距离（见 buyDish）。
+// **不能按行号硬算** —— 列数是媒体查询切的（桌面 6 列、窄屏 3 列），行号算出来是错的
+const dropDist = ref(120)
 
 const isOwned = (book, item) => book.owned.includes(item.id)
 
@@ -642,11 +662,34 @@ const fetchState = async () => {
   }
 }
 
+// 冒泡的行程 = **量出来的锅高 × 0.6**，写成 CSS 变量 `--rise` 挂在 .pot 上。
+//
+// **按比例量，不写死像素**：锅高随格子数走（18 格 3 行 ≈ 350px、39 格 6 行半 ≈ 802px、
+// 手机 3 列 13 行 ≈ 1445px）。行程要是写死的，锅一变高泡泡就只够冒到下半截 ——
+// 上面那几行一点动静都没有，而「锅一直在动」这条比解锁动画更影响体感。
+// 这正是 2026-09-24 加格子时踩到的：写死的 210px 在 350px 的锅里覆盖六成、
+// 在 802px 的锅里只剩两成半。
+//
+// 不进 Vue 的响应式状态（每口锅各自量各自的，有几本、什么时候变都不用管）；
+// 列数会随窗口宽度变（6 列 / 3 列），锅高跟着变，所以 resize 要重量一次。
+//
+// 用 getBoundingClientRect 直接量、不读 scrollHeight：锅里有绝对定位的泡泡和
+// 锅沿伪元素，量元素自己的边框盒才是「锅有多高」
+const measurePotRise = () => {
+  for (const pot of document.querySelectorAll('.collection-card .pot')) {
+    const h = pot.getBoundingClientRect().height
+    if (h > 0) pot.style.setProperty('--rise', Math.round(h * 0.6) + 'px')
+  }
+}
+
 const fetchCollections = async () => {
   try {
     const res = await collectionApi.getState(userStore.userId)
     if (res.code === 0) {
       collections.value = res.data
+      // 锅是这一轮渲染出来的，等 DOM 落定再量，不然量到的是空的
+      await nextTick()
+      measurePotRise()
     }
   } catch (error) {
     console.error('Fetch collections error:', error)
@@ -833,8 +876,23 @@ const showSpiritNotice = (data) => {
 //
 // 买不成（洛克贝不够 / 已经买过）**不是错误，就是没买成**，走同一条浮窗提示，
 // 不弹 alert 打断 —— 跟「今天的精灵都抽完了」一个处理方式。
-const buyDish = async (book, item) => {
+const buyDish = async (book, item, ev) => {
   if (buyingId.value) return
+
+  // 量这一格到锅口的距离，给掉落动画当起点（见 dropDist 的注释）。
+  // **必须在第一个 await 之前量完**：ev.currentTarget 出了事件派发就是 null。
+  // 这一格自己的位置在买的过程中不会动 —— 会动的是它下面那些行，不是它
+  const cell = ev?.currentTarget?.closest('.dish')
+  const pot = cell?.closest('.pot')
+  if (cell && pot) {
+    // +24 让起点落在锅沿外面一点点；120 是给最上面两行兜底的下限
+    // （它们本来就在锅口附近，距离够小了）
+    dropDist.value = Math.max(
+      120,
+      cell.getBoundingClientRect().top - pot.getBoundingClientRect().top + 24
+    )
+  }
+
   buyingId.value = item.id
 
   try {
@@ -886,12 +944,15 @@ const formatTime = (timestamp) => {
 onMounted(() => {
   fetchState()
   fetchCollections()
+  // 窗口一变窄，锅会从 6 列掉到 3 列、高度翻几倍，冒泡的行程得跟着重量
+  window.addEventListener('resize', measurePotRise)
 })
 
 // 切换页面时那两个定时器还挂在那儿，会把已经卸掉的组件里的 ref 再改一次
 onUnmounted(() => {
   clearTimeout(noticeTimer)
   clearTimeout(dropTimer)
+  window.removeEventListener('resize', measurePotRise)
 })
 </script>
 
@@ -1634,17 +1695,31 @@ onUnmounted(() => {
   border: 1px solid rgba(255, 240, 215, 0.55);
   /* 8 个泡泡靠 --i 错开位置和节奏，看着才是「一直在冒」而不是整齐地一起动 */
   left: calc(4% + var(--i) * 11.8%);
-  animation: bubbleUp 3.4s ease-in infinite;
-  animation-delay: calc(var(--i) * -0.46s);
+  animation: bubbleUp 6s ease-in infinite;
+  /* 错开的节奏**必须跟上面那个时长配套**：8 个泡泡 × 0.75s = 6s，正好铺满一整个
+     周期，才是均匀地「一直在冒」。时长改了这里不改，泡泡就会挤在一小段时间里
+     一起冲上去，剩下的时间一片安静 */
+  animation-delay: calc(var(--i) * -0.75s);
 }
 
+/* 泡泡的行程 = 锅高 × 0.6，由 `--rise` 给（在 measurePotRise() 里量出来的）。
+   **这里不许写回固定像素** —— 锅的高度随格子数走（18 格 3 行 ≈ 350px、39 格 6 行半
+   ≈ 802px、手机 3 列 13 行 ≈ 1445px），写死的行程在 350px 的锅里覆盖六成、在 802px
+   的锅里只剩两成半，上面那几行就一点动静都没有了 —— 而「锅一直在动」这条比解锁
+   动画更影响体感。`--rise` 万一没设上（脚本没跑到），兜一个 480px，
+   别让泡泡原地不动。时长 6s 配 8 个泡泡的错峰，见 .bubble 上那段注释。
+
+   量出来是 0.6，实际看见的比这个少：行程尽头那一段 opacity 已经淡到看不见了，
+   肉眼能数到的最高点是**锅顶往下 48% 处**（1280 宽和 420 宽现在一样都是 48%，
+   这正是改成按比例量的目的）。想让它再往上一点就把 0.6 提大，别去改这里的百分比 */
 @keyframes bubbleUp {
   0%   { transform: translateY(0) scale(0.5); opacity: 0; }
   15%  { opacity: 1; }
-  100% { transform: translateY(-210px) scale(1.2); opacity: 0; }
+  100% { transform: translateY(calc(-1 * var(--rise, 480px))) scale(1.2); opacity: 0; }
 }
 
-/* 格子。**18 格全在这儿，没买的也在** —— 空格子看得见才有集齐的冲动，
+/* 格子。**每一格都在这儿，没买的也在**（所以这里不写死格数 —— 加一档格子
+   就是加几行数据，这个文件不该跟着改）—— 空格子看得见才有集齐的冲动，
    这是「收集册」跟「商店」的区别（docs 8.5）。
 
    背景特意很淡：深色块一铺满，格子就变成「一排卡片」，汤和泡泡全被挡住，
@@ -1718,6 +1793,13 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
+/* 买过的格子：按钮**还在 DOM 里占着位置**，只是看不见。
+   别改成 v-if 摘掉 —— 摘掉这一格就矮 22px，网格行高取该行最高的格子，
+   于是这一行塌下去、下面所有行一起往上跳（见模板里那段注释） */
+.dish-buy-off {
+  visibility: hidden;
+}
+
 .dish-buy .roco-ico {
   width: 0.9em;
   height: 0.9em;
@@ -1731,8 +1813,11 @@ onUnmounted(() => {
   animation: dishDrop 1.1s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* 起点的距离**不是写死的**：--drop 是 buyDish 里量出来的「这一格到锅口有多远」
+   （见那边的注释：写死 120px 的话，最下面几行会变成在汤里凭空出现）。
+   量不到时的兜底值跟以前一样是 120px */
 @keyframes dishDrop {
-  0%   { transform: translateY(-120px) scale(1.5) rotate(-12deg); opacity: 0; }
+  0%   { transform: translateY(calc(-1 * var(--drop, 120px))) scale(1.5) rotate(-12deg); opacity: 0; }
   55%  { transform: translateY(0) scale(1) rotate(0deg); opacity: 1; }
   70%  { transform: translateY(4px) scale(0.94); }
   85%  { transform: translateY(-3px) scale(1.04); }

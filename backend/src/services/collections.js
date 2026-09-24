@@ -40,6 +40,9 @@ function itemsOf(book) {
 
     const tierIds = new Set(book.tiers.map((t) => t.id));
     const seenItems = new Set();
+    // 同一个 emoji 占两格，页面上就是两格长得一模一样 —— 靠眼睛翻 39 行很难发现
+    const seenEmoji = new Map();
+    const filledTiers = new Set();
     for (const item of book.items) {
       if (!tierIds.has(item.tier)) {
         throw new Error(`收集册「${book.name}」的「${item.name}」挂了一个不存在的档：${item.tier}`);
@@ -47,7 +50,22 @@ function itemsOf(book) {
       if (seenItems.has(item.id)) {
         throw new Error(`收集册「${book.name}」的格子 id 重复：${item.id}`);
       }
+      if (seenEmoji.has(item.emoji)) {
+        throw new Error(
+          `收集册「${book.name}」的 emoji 重复：${item.emoji} 同时挂在「${seenEmoji.get(item.emoji)}」和「${item.name}」上`
+        );
+      }
       seenItems.add(item.id);
+      seenEmoji.set(item.emoji, item.name);
+      filledTiers.add(item.tier);
+    }
+
+    // 空档不报错的话，加档时忘了填格子会静默变成「这一档一格都没有」，
+    // 页面上什么都看不出来，只有对着数据文件数才发现
+    for (const tier of book.tiers) {
+      if (!filledTiers.has(tier.id)) {
+        throw new Error(`收集册「${book.name}」的档「${tier.name}」一个格子都没有：${tier.id}`);
+      }
     }
   }
 })();
@@ -108,7 +126,14 @@ async function buyItem(store, userId, bookId, itemId) {
     await store.sadd(collectionKey(userId), member);
 
     const now = Date.now();
-    const justDone = owned.size + 1 >= items.length;
+    // **只数这一本的已购格子**。以前这里是 `owned.size + 1` —— owned 是**跨本**的
+    // 集合，拿它跟这一本的格子数比，今天只有一本时凑巧等价；一旦有了第二本、
+    // 或者集合里留下改名/删格子带出来的孤儿成员，它就会在**没集齐的时候误报「齐了」**。
+    //
+    // 按 memberOf 逐格数，**别用 `startsWith(bookId + ':')`** —— 那会把孤儿成员算进来，
+    // 正是同一个错误。`+1` 是因为 owned 是上面 sadd 之前读的，这一格还没在里面
+    const ownedOfBook = items.filter((it) => owned.has(memberOf(bookId, it.id))).length;
+    const justDone = ownedOfBook + 1 >= items.length;
     if (justDone) await store.hset(doneKey(userId), { [bookId]: String(now) });
 
     // 支出流水。前端**已经支持 expenditure** 了（金额那里只给 income 加正号，
